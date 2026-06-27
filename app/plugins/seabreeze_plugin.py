@@ -1,10 +1,14 @@
 from playwright.sync_api import sync_playwright
+from bs4 import BeautifulSoup
+
 from app.plugins.base_plugin import BasePlugin, Listing
 
 
 class SeabreezePlugin(BasePlugin):
 
     name = "Seabreeze"
+
+    BASE_URL = "https://www.seabreeze.com.au/Classifieds/Browse/Windsurfing"
 
     def __init__(self, headless=False, debug=True):
         self.headless = headless
@@ -24,74 +28,151 @@ class SeabreezePlugin(BasePlugin):
                 viewport={"width": 1600, "height": 1200}
             )
 
-            print()
-            print("=" * 60)
-            print("[DEBUG] Loading Seabreeze")
-            print("=" * 60)
+            page.set_default_timeout(30000)
 
-            page.goto(
-                "https://www.seabreeze.com.au/Classifieds/Browse/Windsurfing",
-                wait_until="networkidle",
-                timeout=120000
-            )
+            page_num = 1
 
-            page.wait_for_timeout(5000)
+            while True:
 
-            html = page.content()
+                url = self.BASE_URL
 
-            with open("seabreeze.html", "w", encoding="utf8") as f:
-                f.write(html)
+                if page_num > 1:
+                    url += f"?page={page_num}"
 
-            print("[DEBUG] Saved HTML -> seabreeze.html")
+                print("\n===================================================")
+                print(f"[DEBUG] PAGE {page_num}")
+                print(url)
 
-            body = page.locator("body").inner_text()
+                page.goto(url, wait_until="networkidle")
 
-            print()
-            print("=" * 60)
-            print("[DEBUG] FIRST 4000 CHARACTERS OF BODY")
-            print("=" * 60)
-            print(body[:4000])
+                page.wait_for_timeout(3000)
 
-            print()
-            print("=" * 60)
-            print("[DEBUG] Looking for listing URLs")
-            print("=" * 60)
+                html = page.content()
 
-            anchors = page.locator("a").all()
+                soup = BeautifulSoup(html, "lxml")
 
-            print(f"[DEBUG] Anchor count: {len(anchors)}")
+                cards = soup.select("div.classifieds-listing-card")
+                print(f"[DEBUG] Cards found: {len(cards)}")
 
-            for a in anchors:
+                for i, card in enumerate(cards):
+                    title = card.get_text(" ", strip=True)[:120]
+                    print(f"CARD {i+1}: {title}")
+                    
+                print(f"[DEBUG] Cards found: {len(cards)}")
 
-                try:
-                    href = a.get_attribute("href")
-                    text = a.inner_text().strip()
+                if len(cards) == 0:
+                    break
 
-                    if href and "/Classifieds/View/" in href:
+                added = 0
 
-                        print()
-                        print("TEXT :", text)
-                        print("HREF :", href)
+                for card in cards:
 
-                        results.append(
-                            Listing(
-                                title=text or "Untitled",
-                                price="",
-                                location="",
-                                url="https://www.seabreeze.com.au" + href
-                                if href.startswith("/")
-                                else href,
-                            )
+                    try:
+
+                        title = ""
+
+                        h = card.find(["h4", "h5"])
+
+                        if h:
+                            title = h.get_text(" ", strip=True)
+
+                        if not title:
+                            continue
+
+                        # Disable filterning for now
+                        pass
+
+                        price = ""
+
+                        location = ""
+
+                        for div in card.find_all("div"):
+
+                            text = div.get_text(" ", strip=True)
+
+                            if text.startswith("$"):
+                                price = text
+
+                            elif (
+                                len(text) > 3
+                                and "$" not in text
+                                and "View" not in text
+                            ):
+                                if location == "":
+                                    location = text
+
+                        link = ""
+
+                        a = card.find("a", href=True)
+
+                        if a:
+
+                            href = a["href"]
+
+                            if href.startswith("/"):
+
+                                href = "https://www.seabreeze.com.au" + href
+
+                            link = href
+
+                        listing = Listing(
+                            title=title,
+                            price=price,
+                            location=location,
+                            url=link,
+                            score=100
                         )
 
-                except Exception:
-                    pass
+                        results.append(listing)
 
-            print()
-            print("=" * 60)
-            print(f"[DEBUG] Listings found: {len(results)}")
-            print("=" * 60)
+                        added += 1
 
-            browser.close()
+                        if self.debug:
 
-        return results
+                            print("----------------------------------")
+                            print(title)
+                            print(price)
+                            print(location)
+                            print(link)
+
+                    except Exception as e:
+
+                        print("Card error:", e)
+
+                print(f"[DEBUG] Added {added} listings")
+
+                #
+                # Find Next page
+                #
+
+                next_link = None
+
+                next_link = None
+
+                for a in soup.find_all("a", href=True):
+
+                    href = a["href"]
+
+                    if f"?page={page_num + 1}" in href:
+
+                        next_link = href
+
+                        print("[DEBUG] Found next page:", href)
+
+                        break
+
+                if not next_link:
+
+                    print("[DEBUG] No more pages")
+                    break
+
+                page_num += 1
+
+                browser.close()
+
+                print()
+                print("========================================")
+                print(f"[Seabreeze] Returning {len(results)} listings")
+                print("========================================")
+
+                return results
