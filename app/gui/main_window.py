@@ -20,6 +20,10 @@ class MainWindow(QMainWindow):
         # Plugin system
         self.plugin_manager = PluginManager()
 
+        # Keep the last set of results so table rows can be mapped
+        # back to their full Listing object when a row is selected.
+        self.current_results = []
+
         self._build_ui()
         self._apply_theme()
 
@@ -63,6 +67,8 @@ class MainWindow(QMainWindow):
         self.table.setHorizontalHeaderLabels([
             "Title", "Price", "Location", "Score"
         ])
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.itemSelectionChanged.connect(self.show_selected_details)
 
         # ---------------------------
         # Details Panel
@@ -123,7 +129,10 @@ class MainWindow(QMainWindow):
     # TABLE POPULATION
     # ---------------------------
     def populate_table(self, results):
+        self.current_results = results
+
         self.table.setRowCount(0)
+        self.details.setText("Select a listing to view details...")
 
         for row_idx, item in enumerate(results):
             self.table.insertRow(row_idx)
@@ -132,6 +141,30 @@ class MainWindow(QMainWindow):
             self.table.setItem(row_idx, 1, QTableWidgetItem(item.price))
             self.table.setItem(row_idx, 2, QTableWidgetItem(item.location))
             self.table.setItem(row_idx, 3, QTableWidgetItem(str(item.score)))
+
+    # ---------------------------
+    # DETAILS PANEL
+    # ---------------------------
+    def show_selected_details(self):
+        row = self.table.currentRow()
+
+        if row < 0 or row >= len(self.current_results):
+            self.details.setText("Select a listing to view details...")
+            return
+
+        listing = self.current_results[row]
+
+        description = listing.description or "No description available."
+
+        details_text = (
+            f"{listing.title}\n"
+            f"{listing.price}    |    {listing.location}\n"
+            f"{'-' * 40}\n\n"
+            f"{description}\n\n"
+            f"{listing.url}"
+        )
+
+        self.details.setText(details_text)
 
     # ---------------------------
     # UI THEME
@@ -168,4 +201,3 @@ class MainWindow(QMainWindow):
                 border: 1px solid #555;
             }
         """)
-        

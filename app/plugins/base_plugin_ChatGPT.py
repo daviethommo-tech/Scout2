@@ -2,23 +2,12 @@ from abc import ABC, abstractmethod
 
 
 class Listing:
-    def __init__(
-        self,
-        title,
-        price,
-        location,
-        url,
-        score=0,
-        description="",
-        size="",
-    ):
+    def __init__(self, title, price, location, url, score=0):
         self.title = title
         self.price = price
         self.location = location
         self.url = url
         self.score = score
-        self.description = description
-        self.size = size
 
 
 class BasePlugin(ABC):
@@ -31,3 +20,4 @@ class BasePlugin(ABC):
         Return a list of Listing objects
         """
         pass
+    
