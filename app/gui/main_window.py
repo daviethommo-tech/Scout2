@@ -6,6 +6,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
+from app.plugins.plugin_manager import PluginManager
+
 
 class MainWindow(QMainWindow):
 
@@ -15,13 +17,16 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Scout 2.0")
         self.resize(1200, 750)
 
+        # Plugin system
+        self.plugin_manager = PluginManager()
+
         self._build_ui()
         self._apply_theme()
 
     def _build_ui(self):
 
         # ---------------------------
-        # Navigation
+        # Left Navigation
         # ---------------------------
         self.nav = QListWidget()
         self.nav.addItems([
@@ -34,20 +39,22 @@ class MainWindow(QMainWindow):
         self.nav.setMaximumWidth(200)
 
         # ---------------------------
-        # Search Bar (NEW)
+        # Search Bar
         # ---------------------------
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search listings... e.g. IQ74, Slotbox fins, Starboard")
+        self.search_input.setPlaceholderText(
+            "Search listings... e.g. IQ74, Slotbox fins, Starboard"
+        )
 
         self.search_btn = QPushButton("Search")
         self.search_btn.clicked.connect(self.run_search)
 
-        search_bar = QHBoxLayout()
-        search_bar.addWidget(self.search_input)
-        search_bar.addWidget(self.search_btn)
+        search_bar_layout = QHBoxLayout()
+        search_bar_layout.addWidget(self.search_input)
+        search_bar_layout.addWidget(self.search_btn)
 
-        search_container = QWidget()
-        search_container.setLayout(search_bar)
+        search_bar = QWidget()
+        search_bar.setLayout(search_bar_layout)
 
         # ---------------------------
         # Listings Table
@@ -65,15 +72,15 @@ class MainWindow(QMainWindow):
         self.details.setText("Select a listing to view details...")
 
         # ---------------------------
-        # Center layout (search + table)
+        # Center Layout
         # ---------------------------
         center_widget = QWidget()
         center_layout = QVBoxLayout(center_widget)
-        center_layout.addWidget(search_container)
+        center_layout.addWidget(search_bar)
         center_layout.addWidget(self.table)
 
         # ---------------------------
-        # Split layout
+        # Split Layout
         # ---------------------------
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(self.nav)
@@ -87,66 +94,47 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(container)
 
-        # Status bar
+        # ---------------------------
+        # Status Bar
+        # ---------------------------
         self.status = QStatusBar()
         self.status.showMessage("Ready")
         self.setStatusBar(self.status)
 
     # ---------------------------
-    # SEARCH LOGIC (NEW)
+    # SEARCH LOGIC
     # ---------------------------
     def run_search(self):
         query = self.search_input.text().strip()
 
         if not query:
-            self.status.showMessage("Enter a search term")
+            self.status.showMessage("Please enter a search term")
             return
 
-        self.status.showMessage(f"Searching for: {query}")
+        self.status.showMessage(f"Searching plugins for: {query}")
 
-        results = self.fake_search(query)
+        results = self.plugin_manager.search_all(query)
+
         self.populate_table(results)
 
-        self.status.showMessage(f"Found {len(results)} results for '{query}'")
+        self.status.showMessage(f"Found {len(results)} results")
 
-    def fake_search(self, query):
-        """
-        Temporary stub until we connect real plugins.
-        """
-
-        return [
-            {
-                "title": f"{query} - Example Listing 1",
-                "price": "$850",
-                "location": "Melbourne",
-                "score": 92
-            },
-            {
-                "title": f"{query} Pro Edition",
-                "price": "$1200",
-                "location": "Geelong",
-                "score": 88
-            },
-            {
-                "title": f"Used {query} - Good condition",
-                "price": "$600",
-                "location": "Sydney",
-                "score": 81
-            }
-        ]
-
+    # ---------------------------
+    # TABLE POPULATION
+    # ---------------------------
     def populate_table(self, results):
         self.table.setRowCount(0)
 
         for row_idx, item in enumerate(results):
             self.table.insertRow(row_idx)
-            self.table.setItem(row_idx, 0, QTableWidgetItem(item["title"]))
-            self.table.setItem(row_idx, 1, QTableWidgetItem(item["price"]))
-            self.table.setItem(row_idx, 2, QTableWidgetItem(item["location"]))
-            self.table.setItem(row_idx, 3, QTableWidgetItem(str(item["score"])))
+
+            self.table.setItem(row_idx, 0, QTableWidgetItem(item.title))
+            self.table.setItem(row_idx, 1, QTableWidgetItem(item.price))
+            self.table.setItem(row_idx, 2, QTableWidgetItem(item.location))
+            self.table.setItem(row_idx, 3, QTableWidgetItem(str(item.score)))
 
     # ---------------------------
-    # THEME
+    # UI THEME
     # ---------------------------
     def _apply_theme(self):
         self.setStyleSheet("""
@@ -180,3 +168,4 @@ class MainWindow(QMainWindow):
                 border: 1px solid #555;
             }
         """)
+        
