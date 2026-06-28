@@ -28,6 +28,10 @@ class SeabreezePlugin(BasePlugin):
             print(message)
 
     def search(self, query: str):
+        """
+        Crawl all configured Seabreeze categories and return Listing objects.
+        Filtering is intentionally left to PluginManager so cache searches are fast.
+        """
         results = []
         seen_urls = set()
         pages_crawled = 0
@@ -44,7 +48,7 @@ class SeabreezePlugin(BasePlugin):
                 page_num = 1
 
                 self.log("\n###################################################")
-                self.log(f"[DEBUG] CATEGORY: {category_url}")
+                self.log(f"[DEBUG] START CATEGORY: {category_url}")
                 self.log("###################################################")
 
                 while url:
@@ -60,11 +64,12 @@ class SeabreezePlugin(BasePlugin):
                         page.goto(url, wait_until="domcontentloaded", timeout=60000)
                         page.wait_for_selector(
                             "div.classifieds-listing-card",
-                            timeout=30000
+                            timeout=30000,
                         )
                         page.wait_for_timeout(1000)
                     except PlaywrightTimeoutError as e:
-                        print(f"[Seabreeze] Page load timeout on page {page_num}: {e}")
+                        print(f"[Seabreeze] Page load timeout: {url}")
+                        print(e)
                         break
 
                     html = page.content()
@@ -77,6 +82,7 @@ class SeabreezePlugin(BasePlugin):
                     self.log(f"[DEBUG] Cards found: {len(cards)}")
 
                     if not cards:
+                        self.log("[DEBUG] No cards found; stopping category")
                         break
 
                     added = 0
@@ -84,8 +90,7 @@ class SeabreezePlugin(BasePlugin):
                     for card in cards:
                         try:
                             listing = self._parse_card(card)
-
-                            if listing is None:
+                            if listing is None or not listing.url:
                                 continue
 
                             if listing.url in seen_urls:
@@ -111,9 +116,8 @@ class SeabreezePlugin(BasePlugin):
                     self.log(f"[DEBUG] Added {added} listings")
 
                     next_url = self._find_next_url(soup, url, page_num)
-
                     if not next_url:
-                        self.log("[DEBUG] No more pages")
+                        self.log("[DEBUG] No more pages for this category")
                         break
 
                     url = next_url
@@ -137,7 +141,6 @@ class SeabreezePlugin(BasePlugin):
 
         for a in soup.select("a.page-link[href]"):
             href = a.get("href", "")
-
             if f"page={expected_page}" in href:
                 next_url = urljoin(current_url, href)
                 self.log("[DEBUG] Found next page: " + next_url)
@@ -148,7 +151,6 @@ class SeabreezePlugin(BasePlugin):
     def _parse_card(self, card):
         h = card.find(["h4", "h5"])
         title = h.get_text(" ", strip=True) if h else ""
-
         if not title:
             return None
 
@@ -161,7 +163,6 @@ class SeabreezePlugin(BasePlugin):
 
         location = ""
         loc_icon = card.select_one("i.ic-location")
-
         if loc_icon and loc_icon.parent:
             location = loc_icon.parent.get_text(" ", strip=True)
 
@@ -170,9 +171,7 @@ class SeabreezePlugin(BasePlugin):
 
         link = ""
         category = ""
-
         a = card.select_one("a.stretched-link[href]")
-
         if a:
             link = urljoin(self.ROOT_URL, a["href"])
             category = self._category_from_url(link)
@@ -195,19 +194,15 @@ class SeabreezePlugin(BasePlugin):
 
     def _extract_image(self, card):
         thumb = card.select_one("div.classifieds-listing-thumb")
-
         if thumb:
             style = thumb.get("style", "")
             match = re.search(r"background-image:\s*url\(['\"]?(.*?)['\"]?\)", style)
-
             if match:
                 return urljoin(self.ROOT_URL, match.group(1))
 
         img = card.find("img")
-
         if img:
             src = img.get("src") or img.get("data-src") or ""
-
             if src:
                 return urljoin(self.ROOT_URL, src)
 
@@ -218,7 +213,6 @@ class SeabreezePlugin(BasePlugin):
             return None
 
         match = re.search(r"([0-9][0-9,]*)", price_text)
-
         if not match:
             return None
 
@@ -229,18 +223,14 @@ class SeabreezePlugin(BasePlugin):
 
     def _category_from_url(self, url):
         # /Classifieds/View/Windsurfing/Boards/title/id
-        # /Classifieds/View/Foiling/Foil-boards/title/id
+        # /Classifieds/View/Foiling/Foils-and-Foil-boards/title/id
         parts = url.split("/")
-
         try:
             idx = parts.index("View")
             sport = parts[idx + 1] if len(parts) > idx + 1 else ""
             category = parts[idx + 2] if len(parts) > idx + 2 else ""
-
             if sport and category:
                 return f"{sport} / {category}"
-
             return category or sport
-
         except ValueError:
             return ""
