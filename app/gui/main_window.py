@@ -1,12 +1,13 @@
+from html import escape
 from urllib.request import Request, urlopen
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QTableWidget, QTableWidgetItem,
-    QTextEdit, QLineEdit, QPushButton,
+    QTextBrowser, QLineEdit, QPushButton,
     QSplitter, QStatusBar
 )
-from PySide6.QtCore import Qt, QSize, QObject, QThread, Signal, QTimer
+from PySide6.QtCore import Qt, QSize, QObject, QThread, Signal
 from PySide6.QtGui import QPixmap, QIcon, QColor
 
 from app.plugins.plugin_manager import PluginManager
@@ -76,8 +77,6 @@ class MainWindow(QMainWindow):
         self.plugin_manager = PluginManager()
         self.current_results = []
 
-        # Thumbnail loading is asynchronous. Do not block GUI startup by
-        # downloading hundreds/thousands of images inside populate_table().
         self.image_cache = {}
         self.failed_image_urls = set()
         self.image_thread = None
@@ -89,9 +88,6 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._apply_theme()
         self.load_cached_results_on_startup()
-
-        # Auto-refresh is deliberately disabled. Use the Refresh Cache button
-        # or a future timer/scheduler to refresh when you choose.
 
     def _build_ui(self):
         self.nav = QListWidget()
@@ -139,8 +135,9 @@ class MainWindow(QMainWindow):
         self.table.setColumnWidth(5, 170)
         self.table.setColumnWidth(6, 70)
 
-        self.details = QTextEdit()
+        self.details = QTextBrowser()
         self.details.setReadOnly(True)
+        self.details.setOpenExternalLinks(True)
         self.details.setText("Select a listing to view details...")
 
         center_widget = QWidget()
@@ -167,6 +164,7 @@ class MainWindow(QMainWindow):
     def load_cached_results_on_startup(self):
         results = self.plugin_manager.get_all_cached_results()
         self.populate_table(results)
+
         if results:
             new_count = sum(1 for item in results if item.is_new)
             self.status.showMessage(
@@ -219,8 +217,10 @@ class MainWindow(QMainWindow):
 
         new_count = summary.get("new", 0)
         total = summary.get("total", 0)
+        removed = summary.get("removed", 0)
+
         self.status.showMessage(
-            f"Cache refreshed: {total} listings, {new_count} new"
+            f"Cache refreshed: {total} listings, {new_count} new, {removed} removed"
         )
 
     def on_refresh_failed(self, error_message):
@@ -271,16 +271,12 @@ class MainWindow(QMainWindow):
             elif item.is_new:
                 self._highlight_row(row_idx)
 
-        # Load visible/current result images in the background after table is visible.
         if image_jobs:
             self._start_image_loading(image_jobs)
 
     def _start_image_loading(self, jobs):
         self._cancel_image_loading()
 
-        # Limit initial thumbnail batch so huge cached datasets do not download
-        # thousands of images immediately. Searching narrows the result set and
-        # will load thumbnails for that smaller view.
         jobs = jobs[:250]
 
         self.image_thread = QThread()
@@ -316,13 +312,14 @@ class MainWindow(QMainWindow):
         if row < 0 or row >= self.table.rowCount():
             return
 
-        # The table may have been repopulated while the worker was loading.
         if row >= len(self.current_results):
             return
+
         if self.current_results[row].image != image_url:
             return
 
         pixmap = QPixmap()
+
         if not pixmap.loadFromData(data):
             self.failed_image_urls.add(image_url)
             return
@@ -333,34 +330,43 @@ class MainWindow(QMainWindow):
             Qt.KeepAspectRatio,
             Qt.SmoothTransformation,
         )
+
         icon = QIcon(pixmap)
         self.image_cache[image_url] = icon
 
         item = self.table.item(row, 0)
+
         if item:
             item.setIcon(icon)
             item.setText("")
 
     def _on_image_failed(self, row, image_url, error_message):
         self.failed_image_urls.add(image_url)
-        print(f"[GUI] Image load failed: {image_url} ({error_message})")
+
+        if "NoPhoto.jpg" not in image_url:
+            print(f"[GUI] Image load failed: {image_url} ({error_message})")
 
         if 0 <= row < self.table.rowCount():
             item = self.table.item(row, 0)
+
             if item and item.text() == "IMG":
                 item.setText("")
 
     def _highlight_row(self, row_idx):
         highlight = QColor(32, 96, 48)
+
         for col in range(self.table.columnCount()):
             item = self.table.item(row_idx, col)
+
             if item:
                 item.setBackground(highlight)
 
     def _highlight_removed_row(self, row_idx):
         highlight = QColor(70, 45, 45)
+
         for col in range(self.table.columnCount()):
             item = self.table.item(row_idx, col)
+
             if item:
                 item.setBackground(highlight)
 
@@ -372,31 +378,87 @@ class MainWindow(QMainWindow):
             return
 
         listing = self.current_results[row]
-        description = listing.description or "No description available."
-        status = getattr(listing, "status", "active") or "active"
-        new_text = "NEW LISTING\n" if listing.is_new else ""
-        removed_text = "REMOVED / NO LONGER SEEN\n" if status == "removed" else ""
 
-        details_text = (
-            f"{new_text}"
-            f"{removed_text}"
-            f"{listing.title}\n"
-            f"{listing.price}    |    {listing.location}\n"
-            f"Source: {listing.source}\n"
-            f"Status: {status}\n"
-            f"Category: {listing.category}\n"
-            f"Size: {listing.size}\n"
-            f"First seen: {listing.first_seen}\n"
-            f"Last seen: {listing.last_seen}\n"
-            f"Removed at: {getattr(listing, 'removed_at', '')}\n"
-            f"Refresh count: {getattr(listing, 'refresh_count', 0)}\n"
-            f"Image: {listing.image}\n"
-            f"{'-' * 40}\n\n"
-            f"{description}\n\n"
-            f"{listing.url}"
+        title = escape(listing.title or "")
+        price = escape(listing.price or "")
+        location = escape(listing.location or "")
+        source = escape(getattr(listing, "source", "") or "")
+        status = escape(getattr(listing, "status", "active") or "active")
+        category = escape(getattr(listing, "category", "") or "")
+        size = escape(getattr(listing, "size", "") or "")
+        first_seen = escape(getattr(listing, "first_seen", "") or "")
+        last_seen = escape(getattr(listing, "last_seen", "") or "")
+        removed_at = escape(getattr(listing, "removed_at", "") or "")
+        refresh_count = escape(str(getattr(listing, "refresh_count", 0)))
+        description = escape(getattr(listing, "description", "") or "No description available.")
+
+        url = getattr(listing, "url", "") or ""
+        image = getattr(listing, "image", "") or ""
+
+        url_html = (
+            f'<a href="{escape(url)}">{escape(url)}</a>'
+            if url else ""
         )
 
-        self.details.setText(details_text)
+        image_html = (
+            f'<a href="{escape(image)}">{escape(image)}</a>'
+            if image else ""
+        )
+
+        new_banner = ""
+        if listing.is_new:
+            new_banner = """
+            <div style="background:#206030; color:white; padding:6px; font-weight:bold;">
+                NEW LISTING
+            </div>
+            """
+
+        removed_banner = ""
+        if status.lower() == "removed":
+            removed_banner = """
+            <div style="background:#703030; color:white; padding:6px; font-weight:bold;">
+                REMOVED / NO LONGER SEEN
+            </div>
+            """
+
+        details_html = f"""
+        <html>
+        <body style="font-family: Arial; font-size: 13px; color: #ffffff; background-color: #2b2b2b;">
+            {new_banner}
+            {removed_banner}
+
+            <h2>{title}</h2>
+
+            <p>
+                <b>{price}</b>
+                &nbsp;&nbsp; | &nbsp;&nbsp;
+                {location}
+            </p>
+
+            <hr>
+
+            <p><b>Source:</b> {source}</p>
+            <p><b>Status:</b> {status}</p>
+            <p><b>Category:</b> {category}</p>
+            <p><b>Size:</b> {size}</p>
+            <p><b>First seen:</b> {first_seen}</p>
+            <p><b>Last seen:</b> {last_seen}</p>
+            <p><b>Removed at:</b> {removed_at}</p>
+            <p><b>Refresh count:</b> {refresh_count}</p>
+
+            <hr>
+
+            <p><b>Listing URL:</b><br>{url_html}</p>
+            <p><b>Image URL:</b><br>{image_html}</p>
+
+            <hr>
+
+            <p style="white-space: pre-wrap;">{description}</p>
+        </body>
+        </html>
+        """
+
+        self.details.setHtml(details_html)
 
     def closeEvent(self, event):
         self._cancel_image_loading()
@@ -409,11 +471,15 @@ class MainWindow(QMainWindow):
                 color: #ffffff;
             }
 
-            QListWidget, QTableWidget, QTextEdit, QLineEdit {
+            QListWidget, QTableWidget, QTextBrowser, QLineEdit {
                 background-color: #2b2b2b;
                 color: #ffffff;
                 border: 1px solid #444;
                 padding: 4px;
+            }
+
+            QTextBrowser a {
+                color: #79b8ff;
             }
 
             QPushButton {
