@@ -1,10 +1,13 @@
+from urllib.request import Request, urlopen
+
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QTableWidget, QTableWidgetItem,
     QTextEdit, QLineEdit, QPushButton,
     QSplitter, QStatusBar
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QPixmap, QIcon
 
 from app.plugins.plugin_manager import PluginManager
 
@@ -15,23 +18,16 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("Scout 2.0")
-        self.resize(1200, 750)
+        self.resize(1300, 800)
 
-        # Plugin system
         self.plugin_manager = PluginManager()
-
-        # Keep the last set of results so table rows can be mapped
-        # back to their full Listing object when a row is selected.
         self.current_results = []
+        self.image_cache = {}
 
         self._build_ui()
         self._apply_theme()
 
     def _build_ui(self):
-
-        # ---------------------------
-        # Left Navigation
-        # ---------------------------
         self.nav = QListWidget()
         self.nav.addItems([
             "Dashboard",
@@ -42,57 +38,53 @@ class MainWindow(QMainWindow):
         ])
         self.nav.setMaximumWidth(200)
 
-        # ---------------------------
-        # Search Bar
-        # ---------------------------
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText(
             "Search listings... e.g. IQ74, Slotbox fins, Starboard"
         )
+        self.search_input.returnPressed.connect(self.run_search)
 
         self.search_btn = QPushButton("Search")
         self.search_btn.clicked.connect(self.run_search)
 
+        self.refresh_btn = QPushButton("Refresh Cache")
+        self.refresh_btn.clicked.connect(self.refresh_cache)
+
         search_bar_layout = QHBoxLayout()
         search_bar_layout.addWidget(self.search_input)
         search_bar_layout.addWidget(self.search_btn)
+        search_bar_layout.addWidget(self.refresh_btn)
 
         search_bar = QWidget()
         search_bar.setLayout(search_bar_layout)
 
-        # ---------------------------
-        # Listings Table
-        # ---------------------------
-        self.table = QTableWidget(0, 4)
+        self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels([
-            "Title", "Price", "Location", "Score"
+            "Image", "Title", "Price", "Location", "Score"
         ])
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.itemSelectionChanged.connect(self.show_selected_details)
+        self.table.setIconSize(QSize(90, 70))
+        self.table.setColumnWidth(0, 105)
+        self.table.setColumnWidth(1, 420)
+        self.table.setColumnWidth(2, 90)
+        self.table.setColumnWidth(3, 180)
+        self.table.setColumnWidth(4, 70)
 
-        # ---------------------------
-        # Details Panel
-        # ---------------------------
         self.details = QTextEdit()
         self.details.setReadOnly(True)
         self.details.setText("Select a listing to view details...")
 
-        # ---------------------------
-        # Center Layout
-        # ---------------------------
         center_widget = QWidget()
         center_layout = QVBoxLayout(center_widget)
         center_layout.addWidget(search_bar)
         center_layout.addWidget(self.table)
 
-        # ---------------------------
-        # Split Layout
-        # ---------------------------
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(self.nav)
         splitter.addWidget(center_widget)
         splitter.addWidget(self.details)
-        splitter.setSizes([200, 700, 300])
+        splitter.setSizes([200, 780, 320])
 
         container = QWidget()
         layout = QHBoxLayout(container)
@@ -100,16 +92,10 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(container)
 
-        # ---------------------------
-        # Status Bar
-        # ---------------------------
         self.status = QStatusBar()
         self.status.showMessage("Ready")
         self.setStatusBar(self.status)
 
-    # ---------------------------
-    # SEARCH LOGIC
-    # ---------------------------
     def run_search(self):
         query = self.search_input.text().strip()
 
@@ -117,17 +103,26 @@ class MainWindow(QMainWindow):
             self.status.showMessage("Please enter a search term")
             return
 
-        self.status.showMessage(f"Searching plugins for: {query}")
+        self.search_btn.setEnabled(False)
+        self.status.showMessage(f"Searching cache/plugins for: {query}")
 
-        results = self.plugin_manager.search_all(query)
+        try:
+            results = self.plugin_manager.search_all(query)
+            self.populate_table(results)
+            self.status.showMessage(f"Found {len(results)} results")
+        finally:
+            self.search_btn.setEnabled(True)
 
-        self.populate_table(results)
+    def refresh_cache(self):
+        self.refresh_btn.setEnabled(False)
+        self.status.showMessage("Refreshing cache...")
 
-        self.status.showMessage(f"Found {len(results)} results")
+        try:
+            self.plugin_manager.refresh_cache()
+            self.status.showMessage("Cache refreshed")
+        finally:
+            self.refresh_btn.setEnabled(True)
 
-    # ---------------------------
-    # TABLE POPULATION
-    # ---------------------------
     def populate_table(self, results):
         self.current_results = results
 
@@ -136,15 +131,51 @@ class MainWindow(QMainWindow):
 
         for row_idx, item in enumerate(results):
             self.table.insertRow(row_idx)
+            self.table.setRowHeight(row_idx, 78)
 
-            self.table.setItem(row_idx, 0, QTableWidgetItem(item.title))
-            self.table.setItem(row_idx, 1, QTableWidgetItem(item.price))
-            self.table.setItem(row_idx, 2, QTableWidgetItem(item.location))
-            self.table.setItem(row_idx, 3, QTableWidgetItem(str(item.score)))
+            image_item = QTableWidgetItem()
+            icon = self._get_icon(item.image)
+            if icon:
+                image_item.setIcon(icon)
+            self.table.setItem(row_idx, 0, image_item)
 
-    # ---------------------------
-    # DETAILS PANEL
-    # ---------------------------
+            self.table.setItem(row_idx, 1, QTableWidgetItem(item.title))
+            self.table.setItem(row_idx, 2, QTableWidgetItem(item.price))
+            self.table.setItem(row_idx, 3, QTableWidgetItem(item.location))
+            self.table.setItem(row_idx, 4, QTableWidgetItem(str(item.score)))
+
+    def _get_icon(self, image_url):
+        if not image_url:
+            return None
+
+        if image_url in self.image_cache:
+            return self.image_cache[image_url]
+
+        try:
+            request = Request(
+                image_url,
+                headers={"User-Agent": "Mozilla/5.0 (Scout2)"}
+            )
+            with urlopen(request, timeout=5) as response:
+                data = response.read()
+
+            pixmap = QPixmap()
+            if pixmap.loadFromData(data):
+                pixmap = pixmap.scaled(
+                    90,
+                    70,
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation,
+                )
+                icon = QIcon(pixmap)
+                self.image_cache[image_url] = icon
+                return icon
+
+        except Exception as e:
+            print(f"[GUI] Image load failed: {image_url} ({e})")
+
+        return None
+
     def show_selected_details(self):
         row = self.table.currentRow()
 
@@ -153,12 +184,15 @@ class MainWindow(QMainWindow):
             return
 
         listing = self.current_results[row]
-
         description = listing.description or "No description available."
 
         details_text = (
             f"{listing.title}\n"
             f"{listing.price}    |    {listing.location}\n"
+            f"Source: {listing.source}\n"
+            f"Category: {listing.category}\n"
+            f"Size: {listing.size}\n"
+            f"Image: {listing.image}\n"
             f"{'-' * 40}\n\n"
             f"{description}\n\n"
             f"{listing.url}"
@@ -166,9 +200,6 @@ class MainWindow(QMainWindow):
 
         self.details.setText(details_text)
 
-    # ---------------------------
-    # UI THEME
-    # ---------------------------
     def _apply_theme(self):
         self.setStyleSheet("""
             QMainWindow {
@@ -192,6 +223,11 @@ class MainWindow(QMainWindow):
 
             QPushButton:hover {
                 background-color: #505050;
+            }
+
+            QPushButton:disabled {
+                background-color: #252525;
+                color: #777;
             }
 
             QHeaderView::section {
