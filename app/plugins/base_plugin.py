@@ -21,6 +21,11 @@ class Listing:
         status="active",
         removed_at="",
         refresh_count=0,
+        change_type="",
+        changes=None,
+        changed_at="",
+        previous_price="",
+        previous_price_value=None,
     ):
         self.title = title or ""
         self.price = price or ""
@@ -39,6 +44,15 @@ class Listing:
         self.status = status or "active"
         self.removed_at = removed_at or ""
         self.refresh_count = refresh_count or 0
+
+        # Latest-refresh change detection fields.
+        # change_type is one of: "", "new", "removed", "reactivated",
+        # "price_changed", "updated".
+        self.change_type = change_type or ""
+        self.changes = changes or []
+        self.changed_at = changed_at or ""
+        self.previous_price = previous_price or ""
+        self.previous_price_value = previous_price_value
 
     def to_dict(self):
         return {
@@ -59,6 +73,11 @@ class Listing:
             "status": self.status,
             "removed_at": self.removed_at,
             "refresh_count": self.refresh_count,
+            "change_type": self.change_type,
+            "changes": self.changes,
+            "changed_at": self.changed_at,
+            "previous_price": self.previous_price,
+            "previous_price_value": self.previous_price_value,
         }
 
     @classmethod
@@ -81,6 +100,11 @@ class Listing:
             status=data.get("status", "active"),
             removed_at=data.get("removed_at", ""),
             refresh_count=data.get("refresh_count", 0),
+            change_type=data.get("change_type", ""),
+            changes=data.get("changes", []) or [],
+            changed_at=data.get("changed_at", ""),
+            previous_price=data.get("previous_price", ""),
+            previous_price_value=data.get("previous_price_value"),
         )
 
 
