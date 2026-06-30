@@ -2,7 +2,7 @@ from html import escape
 
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QTableWidget, QTableWidgetItem,
-    QTextBrowser, QPushButton, QSplitter, QLabel, QComboBox
+    QTextBrowser, QPushButton, QSplitter, QLabel, QComboBox, QSizePolicy
 )
 from PySide6.QtCore import Qt, QSize, Signal, QUrl
 from PySide6.QtGui import QPixmap, QIcon, QColor
@@ -22,6 +22,7 @@ class ListingsPage(QWidget):
     view_changes_requested = Signal()
     view_all_requested = Signal()
     manage_saved_searches_requested = Signal()
+    source_changed = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -41,9 +42,14 @@ class ListingsPage(QWidget):
 
         self.search_input = QComboBox()
         self.search_input.setEditable(True)
-        self.search_input.setMinimumWidth(360)
+        self.search_input.setMinimumWidth(460)
         self.search_input.lineEdit().setPlaceholderText("Type a search or choose a saved search...")
         self.search_input.lineEdit().returnPressed.connect(self._emit_search)
+
+        self.source_filter = QComboBox()
+        self.source_filter.setMinimumWidth(120)
+        self.source_filter.setMaximumWidth(190)
+        self.source_filter.currentTextChanged.connect(self._on_source_filter_changed)
 
         self.search_btn = QPushButton("Search")
         self.search_btn.clicked.connect(self._emit_search)
@@ -64,6 +70,8 @@ class ListingsPage(QWidget):
         self.manage_saved_btn.clicked.connect(self.manage_saved_searches_requested.emit)
 
         search_row = QHBoxLayout()
+        search_row.addWidget(QLabel("Source"))
+        search_row.addWidget(self.source_filter)
         search_row.addWidget(QLabel("Search"))
         search_row.addWidget(self.search_input)
         search_row.addWidget(self.search_btn)
@@ -76,16 +84,16 @@ class ListingsPage(QWidget):
         top_widget = QWidget()
         top_widget.setLayout(search_row)
 
-        self.table = QTableWidget(0, 8)
+        self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels([
             "Image", "New", "Change", "Status",
-            "Title", "Price", "Location", "Score"
+            "Source", "Title", "Price", "Location", "Score"
         ])
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.itemSelectionChanged.connect(self.show_selected_details)
         self.table.setIconSize(QSize(90, 70))
 
-        widths = [105, 55, 90, 85, 520, 100, 190, 70]
+        widths = [105, 55, 90, 85, 95, 475, 100, 190, 70]
         for i, w in enumerate(widths):
             self.table.setColumnWidth(i, w)
 
@@ -136,6 +144,45 @@ class ListingsPage(QWidget):
         self.search_input.setEditText(current_query)
         self.search_input.blockSignals(False)
 
+    def _on_source_filter_changed(self, source):
+        self.update_source_column_visibility()
+        self.source_changed.emit(source)
+
+    def update_source_column_visibility(self):
+        # Show Source column only when viewing all sources.
+        show_source = self.current_source_filter() == "All Sources"
+        self.table.setColumnHidden(4, not show_source)
+
+        if show_source:
+            self.table.setColumnWidth(4, 95)
+            self.table.setColumnWidth(5, 475)
+        else:
+            self.table.setColumnWidth(5, 570)
+
+    def current_source_filter(self):
+        return self.source_filter.currentText().strip() or "All Sources"
+
+    def set_source_filter(self, source):
+        source = str(source or "All Sources").strip() or "All Sources"
+        index = self.source_filter.findText(source)
+        if index >= 0:
+            self.source_filter.setCurrentIndex(index)
+
+    def refresh_source_filter(self, sources, current_source=None):
+        current_source = current_source or self.current_source_filter()
+        self.source_filter.blockSignals(True)
+        self.source_filter.clear()
+
+        for source in sources:
+            self.source_filter.addItem(source)
+
+        index = self.source_filter.findText(current_source)
+        if index < 0:
+            index = 0
+        self.source_filter.setCurrentIndex(index)
+        self.update_source_column_visibility()
+        self.source_filter.blockSignals(False)
+
     def set_refresh_enabled(self, enabled):
         self.refresh_btn.setEnabled(enabled)
 
@@ -144,6 +191,7 @@ class ListingsPage(QWidget):
 
         self.current_results = results
         self.table.setRowCount(0)
+        self.update_source_column_visibility()
         self.details.setText("Select a listing to view details...")
 
         for row, item in enumerate(results):
@@ -168,10 +216,11 @@ class ListingsPage(QWidget):
             self.table.setItem(row, 1, self._center_item("NEW" if getattr(item, "is_new", False) else ""))
             self.table.setItem(row, 2, self._center_item((getattr(item, "change_type", "") or "").upper()))
             self.table.setItem(row, 3, self._center_item((getattr(item, "status", "active") or "active").upper()))
-            self.table.setItem(row, 4, QTableWidgetItem(getattr(item, "title", "") or ""))
-            self.table.setItem(row, 5, QTableWidgetItem(getattr(item, "price", "") or ""))
-            self.table.setItem(row, 6, QTableWidgetItem(getattr(item, "location", "") or ""))
-            self.table.setItem(row, 7, self._center_item(str(getattr(item, "score", 0))))
+            self.table.setItem(row, 4, QTableWidgetItem(getattr(item, "source", "") or ""))
+            self.table.setItem(row, 5, QTableWidgetItem(getattr(item, "title", "") or ""))
+            self.table.setItem(row, 6, QTableWidgetItem(getattr(item, "price", "") or ""))
+            self.table.setItem(row, 7, QTableWidgetItem(getattr(item, "location", "") or ""))
+            self.table.setItem(row, 8, self._center_item(str(getattr(item, "score", 0))))
 
             self._colour_row(row, item)
 

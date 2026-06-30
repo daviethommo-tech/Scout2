@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt, QObject, QThread, Signal
 from app.plugins.plugin_manager import PluginManager
 from app.managers.saved_search_manager import SavedSearchManager
 from app.managers.notification_manager import NotificationManager
+from app.managers.source_manager import SourceManager
 from app.gui.listings_page import ListingsPage
 
 
@@ -48,6 +49,8 @@ class MainWindow(QMainWindow):
         self.notification_manager = NotificationManager()
         self.notifications = []
 
+        self.source_manager = SourceManager()
+        self.current_source_filter = self.source_manager.ALL_SOURCES
 
         self.refresh_thread = None
         self.refresh_worker = None
@@ -119,6 +122,7 @@ class MainWindow(QMainWindow):
         page.view_changes_requested.connect(self.view_changes)
         page.view_all_requested.connect(self.view_all)
         page.manage_saved_searches_requested.connect(lambda: self.nav.setCurrentRow(2))
+        page.source_changed.connect(self.on_source_filter_changed)
         return page
 
     def _build_saved_searches_page(self):
@@ -222,6 +226,11 @@ class MainWindow(QMainWindow):
         new_count = sum(1 for item in results if getattr(item, "is_new", False))
         changed = sum(1 for item in results if getattr(item, "change_type", ""))
         price_changed = sum(1 for item in results if getattr(item, "change_type", "") == "price_changed")
+        source_counts = self.source_manager.counts_by_source(results)
+        source_rows = "".join(
+            f"<li><b>{source}</b>: {count}</li>"
+            for source, count in source_counts.items()
+        ) or "<li>No sources loaded.</li>"
 
         saved_count = len(self.saved_searches)
         notification_count = len(self.notifications)
@@ -246,6 +255,9 @@ class MainWindow(QMainWindow):
                 <b>Price changes:</b> {price_changed}
             </p>
 
+            <h2>Sources</h2>
+            <ul>{source_rows}</ul>
+
             <h2>Saved Searches</h2>
             <p><b>{saved_count}</b> saved searches configured.</p>
 
@@ -266,12 +278,31 @@ class MainWindow(QMainWindow):
     def load_cached_results_on_startup(self):
         results = self.plugin_manager.get_all_cached_results()
         self.showing_changes = False
+        self.refresh_source_filter(results)
         self.populate_table(results)
 
         new_count = sum(1 for item in results if getattr(item, "is_new", False))
         self.status.showMessage(
             f"Loaded {len(results)} cached listings ({new_count} NEW). Cache not refreshed automatically."
         )
+
+    def refresh_source_filter(self, results=None):
+        if results is None:
+            results = self.plugin_manager.get_all_cached_results()
+
+        sources = self.source_manager.list_sources(results)
+        self.listings_page.refresh_source_filter(sources, self.current_source_filter)
+        self.current_source_filter = self.listings_page.current_source_filter()
+
+    def on_source_filter_changed(self, source):
+        self.current_source_filter = source or self.source_manager.ALL_SOURCES
+        if self.showing_changes:
+            self.view_changes()
+        else:
+            self.run_search(self.current_search_text())
+
+    def apply_source_filter(self, results):
+        return self.source_manager.filter_by_source(results, self.current_source_filter)
 
     def run_search(self, query=None):
         self.showing_changes = False
@@ -285,16 +316,22 @@ class MainWindow(QMainWindow):
         self.listings_page.search_btn.setEnabled(False)
         try:
             results = self.plugin_manager.search_all(query)
+            results = self.apply_source_filter(results)
             self.populate_table(results)
-            self.status.showMessage(f"Found {len(results)} results")
+            self.status.showMessage(
+                f"Found {len(results)} results | Source: {self.current_source_filter}"
+            )
         finally:
             self.listings_page.search_btn.setEnabled(True)
 
     def view_all(self):
         self.showing_changes = False
         results = self.plugin_manager.search_all(self.current_search_text())
+        results = self.apply_source_filter(results)
         self.populate_table(results)
-        self.status.showMessage(f"Showing all matching listings: {len(results)}")
+        self.status.showMessage(
+            f"Showing all matching listings: {len(results)} | Source: {self.current_source_filter}"
+        )
 
     def view_changes(self):
         self.showing_changes = True
@@ -307,8 +344,11 @@ class MainWindow(QMainWindow):
                 if getattr(item, "change_type", "")
             ]
 
+        results = self.apply_source_filter(results)
         self.populate_table(results)
-        self.status.showMessage(f"Showing changed listings: {len(results)}")
+        self.status.showMessage(
+            f"Showing changed listings: {len(results)} | Source: {self.current_source_filter}"
+        )
 
 
     def load_saved_searches(self):
@@ -644,6 +684,7 @@ class MainWindow(QMainWindow):
 
         self.saved_search_alerts = self.check_saved_search_alerts()
         self.refresh_saved_searches_list()
+        self.refresh_source_filter()
 
         notification = self.create_refresh_notification(summary)
         if notification:
