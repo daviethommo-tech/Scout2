@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QTableWidget, QTableWidgetItem,
     QTextBrowser, QLineEdit, QPushButton,
-    QSplitter, QStatusBar, QLabel, QStackedWidget, QComboBox
+    QSplitter, QStatusBar, QLabel, QStackedWidget
 )
 from PySide6.QtCore import Qt, QSize, QObject, QThread, Signal, QUrl
 from PySide6.QtGui import QPixmap, QIcon, QColor
@@ -139,38 +139,15 @@ class MainWindow(QMainWindow):
         self.all_btn = QPushButton("View All")
         self.all_btn.clicked.connect(self.view_all)
 
-        search_row = QHBoxLayout()
-        search_row.addWidget(QLabel("Search"))
-        search_row.addWidget(self.search_input)
-        search_row.addWidget(self.search_btn)
-        search_row.addWidget(self.refresh_btn)
-        search_row.addWidget(self.changes_btn)
-        search_row.addWidget(self.all_btn)
-
-        self.saved_search_combo = QComboBox()
-        self.saved_search_combo.setMinimumWidth(260)
-
-        self.run_saved_combo_btn = QPushButton("Run Saved")
-        self.run_saved_combo_btn.clicked.connect(self.run_saved_search_from_combo)
-
-        self.save_current_from_listings_btn = QPushButton("Save Search")
-        self.save_current_from_listings_btn.clicked.connect(self.add_saved_search)
-
-        self.manage_saved_btn = QPushButton("Manage Saved Searches")
-        self.manage_saved_btn.clicked.connect(lambda: self.nav.setCurrentRow(2))
-
-        saved_row = QHBoxLayout()
-        saved_row.addWidget(QLabel("Saved"))
-        saved_row.addWidget(self.saved_search_combo)
-        saved_row.addWidget(self.run_saved_combo_btn)
-        saved_row.addWidget(self.save_current_from_listings_btn)
-        saved_row.addWidget(self.manage_saved_btn)
-        saved_row.addStretch()
+        top = QHBoxLayout()
+        top.addWidget(self.search_input)
+        top.addWidget(self.search_btn)
+        top.addWidget(self.refresh_btn)
+        top.addWidget(self.changes_btn)
+        top.addWidget(self.all_btn)
 
         top_widget = QWidget()
-        top_layout = QVBoxLayout(top_widget)
-        top_layout.addLayout(search_row)
-        top_layout.addLayout(saved_row)
+        top_widget.setLayout(top)
 
         self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels([
@@ -211,7 +188,7 @@ class MainWindow(QMainWindow):
         self.saved_searches_list = QListWidget()
         self.saved_searches_list.itemDoubleClicked.connect(self.run_selected_saved_search)
 
-        self.add_saved_btn = QPushButton("Save Current Listings Search")
+        self.add_saved_btn = QPushButton("Save Current Search")
         self.add_saved_btn.clicked.connect(self.add_saved_search)
 
         self.run_saved_btn = QPushButton("Run Saved Search")
@@ -220,7 +197,7 @@ class MainWindow(QMainWindow):
         self.delete_saved_btn = QPushButton("Delete Saved Search")
         self.delete_saved_btn.clicked.connect(self.delete_selected_saved_search)
 
-        hint = QLabel("Saved searches can be run directly from the Listings page. This page is for reviewing and deleting them. Double-click one to run it.")
+        hint = QLabel("Tip: enter a query on the Listings page, then save it here. Double-click a saved search to run it.")
 
         layout.addWidget(heading)
         layout.addWidget(hint)
@@ -338,7 +315,7 @@ class MainWindow(QMainWindow):
             </p>
 
             <hr>
-            <p>Use Listings for normal searching. Saved searches can be run directly from Listings; use the Saved Searches page only for management.</p>
+            <p>Use the navigation panel to switch between Listings, Saved Searches, Notifications and Settings.</p>
         </body>
         </html>
         """
@@ -425,35 +402,14 @@ class MainWindow(QMainWindow):
             self.status.showMessage(f"Failed to save saved searches: {e}")
 
     def refresh_saved_searches_list(self):
-        if hasattr(self, "saved_searches_list"):
-            self.saved_searches_list.clear()
-
-        if hasattr(self, "saved_search_combo"):
-            current = self.saved_search_combo.currentData() or self.saved_search_combo.currentText()
-            self.saved_search_combo.blockSignals(True)
-            self.saved_search_combo.clear()
+        self.saved_searches_list.clear()
 
         for search in self.saved_searches:
             alert_count = len(self.saved_search_alerts.get(search, []))
             label = f"{search}  ({alert_count})" if alert_count else search
-
-            if hasattr(self, "saved_searches_list"):
-                self.saved_searches_list.addItem(label)
-                list_item = self.saved_searches_list.item(self.saved_searches_list.count() - 1)
-                list_item.setData(Qt.UserRole, search)
-
-            if hasattr(self, "saved_search_combo"):
-                self.saved_search_combo.addItem(label, search)
-
-        if hasattr(self, "saved_search_combo"):
-            if self.saved_search_combo.count() == 0:
-                self.saved_search_combo.addItem("No saved searches yet", "")
-
-            index = self.saved_search_combo.findData(current)
-            if index >= 0:
-                self.saved_search_combo.setCurrentIndex(index)
-
-            self.saved_search_combo.blockSignals(False)
+            self.saved_searches_list.addItem(label)
+            list_item = self.saved_searches_list.item(self.saved_searches_list.count() - 1)
+            list_item.setData(Qt.UserRole, search)
 
     def add_saved_search(self):
         query = self.search_input.text().strip()
@@ -471,27 +427,7 @@ class MainWindow(QMainWindow):
         self.saved_searches.sort(key=str.lower)
         self.save_saved_searches()
         self.refresh_saved_searches_list()
-
-        if hasattr(self, "saved_search_combo"):
-            index = self.saved_search_combo.findData(query)
-            if index >= 0:
-                self.saved_search_combo.setCurrentIndex(index)
-
         self.status.showMessage(f"Saved search: {query}")
-
-    def run_saved_search_from_combo(self):
-        if not hasattr(self, "saved_search_combo"):
-            return
-
-        query = (self.saved_search_combo.currentData() or "").strip()
-
-        if not query:
-            self.status.showMessage("No saved search selected.")
-            return
-
-        self.nav.setCurrentRow(1)
-        self.search_input.setText(query)
-        self.run_search()
 
     def run_selected_saved_search(self):
         item = self.saved_searches_list.currentItem()
