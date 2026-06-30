@@ -2,17 +2,15 @@ from html import escape
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QListWidget, QTableWidget, QTableWidgetItem,
-    QTextBrowser, QLineEdit, QPushButton,
-    QSplitter, QStatusBar, QLabel, QStackedWidget, QComboBox
+    QListWidget, QTextBrowser, QPushButton,
+    QSplitter, QStatusBar, QLabel, QStackedWidget
 )
-from PySide6.QtCore import Qt, QSize, QObject, QThread, Signal, QUrl
-from PySide6.QtGui import QPixmap, QIcon, QColor
-from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
+from PySide6.QtCore import Qt, QObject, QThread, Signal
 
 from app.plugins.plugin_manager import PluginManager
 from app.managers.saved_search_manager import SavedSearchManager
 from app.managers.notification_manager import NotificationManager
+from app.gui.listings_page import ListingsPage
 
 
 class CacheRefreshWorker(QObject):
@@ -50,11 +48,6 @@ class MainWindow(QMainWindow):
         self.notification_manager = NotificationManager()
         self.notifications = []
 
-        self.image_cache = {}
-        self.failed_image_urls = set()
-        self.pending_image_replies = {}
-        self.network = QNetworkAccessManager(self)
-        self.network.finished.connect(self._on_thumbnail_reply)
 
         self.refresh_thread = None
         self.refresh_worker = None
@@ -119,75 +112,13 @@ class MainWindow(QMainWindow):
         return page
 
     def _build_listings_page(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
-
-        self.search_input = QComboBox()
-        self.search_input.setEditable(True)
-        self.search_input.setMinimumWidth(360)
-        self.search_input.lineEdit().setPlaceholderText("Type a search or choose a saved search...")
-        self.search_input.lineEdit().returnPressed.connect(self.run_search)
-
-        self.search_btn = QPushButton("Search")
-        self.search_btn.clicked.connect(self.run_search)
-
-        self.refresh_btn = QPushButton("Refresh Cache")
-        self.refresh_btn.clicked.connect(self.start_background_refresh)
-
-        self.changes_btn = QPushButton("View Changes")
-        self.changes_btn.clicked.connect(self.view_changes)
-
-        self.all_btn = QPushButton("View All")
-        self.all_btn.clicked.connect(self.view_all)
-
-        self.save_current_from_listings_btn = QPushButton("Save Search")
-        self.save_current_from_listings_btn.clicked.connect(self.add_saved_search)
-
-        self.manage_saved_btn = QPushButton("Manage Saved Searches")
-        self.manage_saved_btn.clicked.connect(lambda: self.nav.setCurrentRow(2))
-
-        search_row = QHBoxLayout()
-        search_row.addWidget(QLabel("Search"))
-        search_row.addWidget(self.search_input)
-        search_row.addWidget(self.search_btn)
-        search_row.addWidget(self.save_current_from_listings_btn)
-        search_row.addWidget(self.refresh_btn)
-        search_row.addWidget(self.changes_btn)
-        search_row.addWidget(self.all_btn)
-        search_row.addWidget(self.manage_saved_btn)
-
-        top_widget = QWidget()
-        top_widget.setLayout(search_row)
-
-        self.table = QTableWidget(0, 8)
-        self.table.setHorizontalHeaderLabels([
-            "Image", "New", "Change", "Status",
-            "Title", "Price", "Location", "Score"
-        ])
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.itemSelectionChanged.connect(self.show_selected_details)
-        self.table.setIconSize(QSize(90, 70))
-
-        widths = [105, 55, 90, 85, 520, 100, 190, 70]
-        for i, w in enumerate(widths):
-            self.table.setColumnWidth(i, w)
-
-        self.details = QTextBrowser()
-        self.details.setReadOnly(True)
-        self.details.setOpenExternalLinks(True)
-        self.details.setText("Select a listing to view details...")
-
-        splitter = QSplitter(Qt.Horizontal)
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.addWidget(top_widget)
-        left_layout.addWidget(self.table)
-
-        splitter.addWidget(left)
-        splitter.addWidget(self.details)
-        splitter.setSizes([860, 390])
-
-        layout.addWidget(splitter)
+        page = ListingsPage()
+        page.search_requested.connect(self.run_search)
+        page.save_search_requested.connect(self.add_saved_search)
+        page.refresh_requested.connect(self.start_background_refresh)
+        page.view_changes_requested.connect(self.view_changes)
+        page.view_all_requested.connect(self.view_all)
+        page.manage_saved_searches_requested.connect(lambda: self.nav.setCurrentRow(2))
         return page
 
     def _build_saved_searches_page(self):
@@ -342,17 +273,22 @@ class MainWindow(QMainWindow):
             f"Loaded {len(results)} cached listings ({new_count} NEW). Cache not refreshed automatically."
         )
 
-    def run_search(self):
+    def run_search(self, query=None):
         self.showing_changes = False
-        query = self.current_search_text()
 
-        self.search_btn.setEnabled(False)
+        if query is None:
+            query = self.current_search_text()
+        else:
+            query = str(query or "").strip()
+            self.set_search_text(query)
+
+        self.listings_page.search_btn.setEnabled(False)
         try:
             results = self.plugin_manager.search_all(query)
             self.populate_table(results)
             self.status.showMessage(f"Found {len(results)} results")
         finally:
-            self.search_btn.setEnabled(True)
+            self.listings_page.search_btn.setEnabled(True)
 
     def view_all(self):
         self.showing_changes = False
@@ -387,12 +323,6 @@ class MainWindow(QMainWindow):
         if hasattr(self, "saved_searches_list"):
             self.saved_searches_list.clear()
 
-        current_query = ""
-        if hasattr(self, "search_input"):
-            current_query = self.current_search_text()
-            self.search_input.blockSignals(True)
-            self.search_input.clear()
-
         for search in self.saved_searches:
             alert_count = len(self.saved_search_alerts.get(search, []))
             label = f"{search}  ({alert_count})" if alert_count else search
@@ -402,12 +332,11 @@ class MainWindow(QMainWindow):
                 list_item = self.saved_searches_list.item(self.saved_searches_list.count() - 1)
                 list_item.setData(Qt.UserRole, search)
 
-            if hasattr(self, "search_input"):
-                self.search_input.addItem(label, search)
-
-        if hasattr(self, "search_input"):
-            self.search_input.setEditText(current_query)
-            self.search_input.blockSignals(False)
+        if hasattr(self, "listings_page"):
+            self.listings_page.refresh_saved_searches_list(
+                self.saved_searches,
+                self.saved_search_alerts,
+            )
 
     def add_saved_search(self):
         query = self.current_search_text()
@@ -418,32 +347,15 @@ class MainWindow(QMainWindow):
         if added:
             self.refresh_saved_searches_list()
 
-            if hasattr(self, "search_input"):
-                self.set_search_text(query)
+            self.set_search_text(query)
 
         self.status.showMessage(message)
 
     def current_search_text(self):
-        if hasattr(self.search_input, "currentText"):
-            data = self.search_input.currentData()
-            text = self.search_input.currentText().strip()
-
-            # If the user selected a saved search with an alert-count label,
-            # prefer the stored raw query. If they typed custom text, use text.
-            if data and text in [self.search_input.itemText(i) for i in range(self.search_input.count())]:
-                return str(data).strip()
-
-            return text
-
-        return self.search_input.text().strip()
+        return self.listings_page.current_search_text()
 
     def set_search_text(self, query):
-        query = str(query or "").strip()
-
-        if hasattr(self.search_input, "setEditText"):
-            self.search_input.setEditText(query)
-        else:
-            self.search_input.setText(query)
+        self.listings_page.set_search_text(query)
 
     def run_selected_saved_search(self):
         item = self.saved_searches_list.currentItem()
@@ -503,7 +415,7 @@ class MainWindow(QMainWindow):
             return escape(str(value or ""))
 
         if not self.notifications:
-            target = getattr(self, "notifications_text", self.details)
+            target = getattr(self, "notifications_text", self.listings_page.details)
             target.setHtml("""
             <html>
             <body style="font-family:Arial;font-size:13px;color:#ffffff;background-color:#2b2b2b;">
@@ -616,13 +528,13 @@ class MainWindow(QMainWindow):
         </html>
         """
 
-        target = getattr(self, "notifications_text", self.details)
+        target = getattr(self, "notifications_text", self.listings_page.details)
         target.setHtml(html)
         self.status.showMessage(f"Notification Center: {len(self.notifications)} saved notifications")
 
     def clear_notifications(self):
         self.notifications = self.notification_manager.clear()
-        target = getattr(self, "notifications_text", self.details)
+        target = getattr(self, "notifications_text", self.listings_page.details)
         target.setHtml("""
         <html>
         <body style="font-family:Arial;font-size:13px;color:#ffffff;background-color:#2b2b2b;">
@@ -697,7 +609,7 @@ class MainWindow(QMainWindow):
         </html>
         """
 
-        self.details.setHtml(html)
+        self.listings_page.details.setHtml(html)
 
     def start_background_refresh(self):
         if self.refresh_running:
@@ -705,7 +617,7 @@ class MainWindow(QMainWindow):
             return
 
         self.refresh_running = True
-        self.refresh_btn.setEnabled(False)
+        self.listings_page.set_refresh_enabled(False)
         self.status.showMessage("Refreshing cache in background...")
 
         self.refresh_thread = QThread()
@@ -728,7 +640,7 @@ class MainWindow(QMainWindow):
         self.refresh_thread = None
 
     def on_refresh_finished(self, summary):
-        self.refresh_btn.setEnabled(True)
+        self.listings_page.set_refresh_enabled(True)
 
         self.saved_search_alerts = self.check_saved_search_alerts()
         self.refresh_saved_searches_list()
@@ -761,211 +673,14 @@ class MainWindow(QMainWindow):
             self.status.showMessage(base_message)
 
     def on_refresh_failed(self, error):
-        self.refresh_btn.setEnabled(True)
+        self.listings_page.set_refresh_enabled(True)
         self.status.showMessage(f"Cache refresh failed: {error}")
 
     def populate_table(self, results):
-        self._cancel_pending_thumbnails()
-
-        self.current_results = results
-        self.table.setRowCount(0)
-        self.details.setText("Select a listing to view details...")
-
-        for row, item in enumerate(results):
-            self.table.insertRow(row)
-            self.table.setRowHeight(row, 78)
-
-            image_item = QTableWidgetItem()
-            image_item.setTextAlignment(Qt.AlignCenter)
-
-            image_url = getattr(item, "image", "") or ""
-
-            if image_url in self.image_cache:
-                image_item.setIcon(self.image_cache[image_url])
-            elif image_url and image_url not in self.failed_image_urls:
-                image_item.setText("IMG")
-                self._queue_thumbnail(row, image_url)
-            else:
-                image_item.setText("")
-
-            self.table.setItem(row, 0, image_item)
-
-            self.table.setItem(row, 1, self._center_item("NEW" if getattr(item, "is_new", False) else ""))
-            self.table.setItem(row, 2, self._center_item((getattr(item, "change_type", "") or "").upper()))
-            self.table.setItem(row, 3, self._center_item((getattr(item, "status", "active") or "active").upper()))
-            self.table.setItem(row, 4, QTableWidgetItem(getattr(item, "title", "") or ""))
-            self.table.setItem(row, 5, QTableWidgetItem(getattr(item, "price", "") or ""))
-            self.table.setItem(row, 6, QTableWidgetItem(getattr(item, "location", "") or ""))
-            self.table.setItem(row, 7, self._center_item(str(getattr(item, "score", 0))))
-
-            self._colour_row(row, item)
-
-    def _center_item(self, text):
-        item = QTableWidgetItem(text)
-        item.setTextAlignment(Qt.AlignCenter)
-        return item
-
-    def _queue_thumbnail(self, row, image_url):
-        if len(self.pending_image_replies) >= 250:
-            return
-
-        request = QNetworkRequest(QUrl(image_url))
-        request.setRawHeader(b"User-Agent", b"Mozilla/5.0 (Scout2)")
-
-        reply = self.network.get(request)
-        self.pending_image_replies[reply] = (row, image_url)
-
-    def _on_thumbnail_reply(self, reply):
-        row, image_url = self.pending_image_replies.pop(reply, (-1, ""))
-
-        try:
-            if reply.error() != QNetworkReply.NoError:
-                self.failed_image_urls.add(image_url)
-                if image_url and "NoPhoto.jpg" not in image_url:
-                    print(f"[GUI] Image load failed: {image_url} ({reply.errorString()})")
-                return
-
-            data = bytes(reply.readAll())
-            pixmap = QPixmap()
-
-            if not pixmap.loadFromData(data):
-                self.failed_image_urls.add(image_url)
-                return
-
-            if row < 0 or row >= self.table.rowCount():
-                return
-
-            if row >= len(self.current_results):
-                return
-
-            if getattr(self.current_results[row], "image", "") != image_url:
-                return
-
-            pixmap = pixmap.scaled(
-                90, 70,
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation
-            )
-
-            icon = QIcon(pixmap)
-            self.image_cache[image_url] = icon
-
-            item = self.table.item(row, 0)
-            if item:
-                item.setIcon(icon)
-                item.setText("")
-
-        finally:
-            reply.deleteLater()
-
-    def _cancel_pending_thumbnails(self):
-        for reply in list(self.pending_image_replies.keys()):
-            try:
-                reply.abort()
-                reply.deleteLater()
-            except RuntimeError:
-                pass
-
-        self.pending_image_replies.clear()
-
-    def _colour_row(self, row, item):
-        status = (getattr(item, "status", "active") or "active").lower()
-        change = (getattr(item, "change_type", "") or "").lower()
-
-        colour = None
-
-        if status == "removed":
-            colour = QColor(70, 45, 45)
-        elif change == "price":
-            colour = QColor(90, 75, 35)
-        elif change == "new" or getattr(item, "is_new", False):
-            colour = QColor(32, 96, 48)
-        elif change == "back":
-            colour = QColor(35, 75, 95)
-        elif change == "updated":
-            colour = QColor(55, 55, 90)
-
-        if not colour:
-            return
-
-        for col in range(self.table.columnCount()):
-            cell = self.table.item(row, col)
-            if cell:
-                cell.setBackground(colour)
-
-    def show_selected_details(self):
-        row = self.table.currentRow()
-
-        if row < 0 or row >= len(self.current_results):
-            self.details.setText("Select a listing to view details...")
-            return
-
-        listing = self.current_results[row]
-
-        def e(value):
-            return escape(str(value or ""))
-
-        url = getattr(listing, "url", "") or ""
-        image = getattr(listing, "image", "") or ""
-
-        banners = ""
-
-        if getattr(listing, "is_new", False):
-            banners += '<div style="background:#206030;color:white;padding:6px;font-weight:bold;">NEW LISTING</div>'
-
-        if (getattr(listing, "status", "active") or "").lower() == "removed":
-            banners += '<div style="background:#703030;color:white;padding:6px;font-weight:bold;">REMOVED / NO LONGER SEEN</div>'
-
-        change_type = getattr(listing, "change_type", "") or ""
-        if change_type:
-            banners += f'<div style="background:#705a25;color:white;padding:6px;font-weight:bold;">CHANGE: {e(change_type).upper()}</div>'
-
-        url_html = f'<a href="{e(url)}">{e(url)}</a>' if url else ""
-        image_html = f'<a href="{e(image)}">{e(image)}</a>' if image else ""
-
-        previous_price = getattr(listing, "previous_price", "") or ""
-        previous_price_html = f"<p><b>Previous price:</b> {e(previous_price)}</p>" if previous_price else ""
-
-        html = f"""
-        <html>
-        <body style="font-family:Arial;font-size:13px;color:#ffffff;background-color:#2b2b2b;">
-            {banners}
-
-            <h2>{e(getattr(listing, "title", ""))}</h2>
-
-            <p><b>{e(getattr(listing, "price", ""))}</b>
-            &nbsp;&nbsp; | &nbsp;&nbsp;
-            {e(getattr(listing, "location", ""))}</p>
-
-            <hr>
-
-            <p><b>Source:</b> {e(getattr(listing, "source", ""))}</p>
-            <p><b>Status:</b> {e(getattr(listing, "status", "active"))}</p>
-            <p><b>Change:</b> {e(change_type)}</p>
-            {previous_price_html}
-            <p><b>Category:</b> {e(getattr(listing, "category", ""))}</p>
-            <p><b>Size:</b> {e(getattr(listing, "size", ""))}</p>
-            <p><b>First seen:</b> {e(getattr(listing, "first_seen", ""))}</p>
-            <p><b>Last seen:</b> {e(getattr(listing, "last_seen", ""))}</p>
-            <p><b>Removed at:</b> {e(getattr(listing, "removed_at", ""))}</p>
-            <p><b>Refresh count:</b> {e(getattr(listing, "refresh_count", 0))}</p>
-
-            <hr>
-
-            <p><b>Listing URL:</b><br>{url_html}</p>
-            <p><b>Image URL:</b><br>{image_html}</p>
-
-            <hr>
-
-            <p style="white-space:pre-wrap;">{e(getattr(listing, "description", "") or "No description available.")}</p>
-        </body>
-        </html>
-        """
-
-        self.details.setHtml(html)
+        self.listings_page.populate_table(results)
 
     def closeEvent(self, event):
-        self._cancel_pending_thumbnails()
+        self.listings_page.cancel_pending_thumbnails()
 
         if self.refresh_running:
             self.status.showMessage("Refresh still running. Please wait.")
