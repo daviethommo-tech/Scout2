@@ -45,6 +45,7 @@ class MainWindow(QMainWindow):
 
         self.saved_searches_file = Path("cache") / "saved_searches.json"
         self.saved_searches = []
+        self.saved_search_alerts = {}
 
         self.image_cache = {}
         self.failed_image_urls = set()
@@ -234,7 +235,11 @@ class MainWindow(QMainWindow):
         self.saved_searches_list.clear()
 
         for search in self.saved_searches:
-            self.saved_searches_list.addItem(search)
+            alert_count = len(self.saved_search_alerts.get(search, []))
+            label = f"{search}  ({alert_count})" if alert_count else search
+            self.saved_searches_list.addItem(label)
+            list_item = self.saved_searches_list.item(self.saved_searches_list.count() - 1)
+            list_item.setData(Qt.UserRole, search)
 
     def add_saved_search(self):
         query = self.search_input.text().strip()
@@ -261,7 +266,7 @@ class MainWindow(QMainWindow):
             self.status.showMessage("Select a saved search first.")
             return
 
-        query = item.text().strip()
+        query = (item.data(Qt.UserRole) or item.text()).strip()
         if not query:
             return
 
@@ -275,7 +280,7 @@ class MainWindow(QMainWindow):
             self.status.showMessage("Select a saved search to delete.")
             return
 
-        query = item.text().strip()
+        query = (item.data(Qt.UserRole) or item.text()).strip()
         self.saved_searches = [
             search for search in self.saved_searches
             if search.lower() != query.lower()
@@ -284,6 +289,116 @@ class MainWindow(QMainWindow):
         self.save_saved_searches()
         self.refresh_saved_searches_list()
         self.status.showMessage(f"Deleted saved search: {query}")
+
+    def check_saved_search_alerts(self):
+        """
+        Return saved searches that match listings changed in the latest refresh.
+
+        Alerts focus on active listings with a current change marker, especially:
+        - new
+        - price_changed
+        - reactivated
+        - updated
+        """
+        alerts = {}
+
+        if not self.saved_searches:
+            return alerts
+
+        changed_items = [
+            item for item in self.plugin_manager.get_all_cached_results()
+            if getattr(item, "status", "active") == "active"
+            and getattr(item, "change_type", "")
+        ]
+
+        for search in self.saved_searches:
+            words = search.lower().split()
+            if not words:
+                continue
+
+            matches = []
+            for item in changed_items:
+                haystack = " ".join([
+                    getattr(item, "title", ""),
+                    getattr(item, "description", ""),
+                    getattr(item, "size", ""),
+                    getattr(item, "location", ""),
+                    getattr(item, "category", ""),
+                    getattr(item, "price", ""),
+                    getattr(item, "source", ""),
+                    getattr(item, "change_type", ""),
+                    " ".join(getattr(item, "changes", []) or []),
+                ]).lower()
+
+                if all(word in haystack for word in words):
+                    matches.append(item)
+
+            if matches:
+                alerts[search] = matches
+
+        return alerts
+
+    def show_saved_search_alerts(self):
+        if not self.saved_search_alerts:
+            return
+
+        def e(value):
+            return escape(str(value or ""))
+
+        sections = []
+
+        for search, matches in self.saved_search_alerts.items():
+            rows = []
+            for item in matches[:20]:
+                change_type = getattr(item, "change_type", "") or "changed"
+                price = getattr(item, "price", "") or ""
+                location = getattr(item, "location", "") or ""
+                title = getattr(item, "title", "") or ""
+                url = getattr(item, "url", "") or ""
+
+                title_html = (
+                    f'<a href="{e(url)}">{e(title)}</a>'
+                    if url else e(title)
+                )
+
+                previous_price = getattr(item, "previous_price", "") or ""
+                previous = (
+                    f" <span style='color:#cccccc;'>(was {e(previous_price)})</span>"
+                    if previous_price else ""
+                )
+
+                rows.append(
+                    "<li>"
+                    f"<b>{e(change_type.upper())}</b> — "
+                    f"{title_html}<br>"
+                    f"<span style='color:#cccccc;'>{e(price)}{previous}"
+                    f" &nbsp; | &nbsp; {e(location)}</span>"
+                    "</li>"
+                )
+
+            extra = ""
+            if len(matches) > 20:
+                extra = f"<p><i>...and {len(matches) - 20} more matches.</i></p>"
+
+            sections.append(
+                f"<h3>Saved search: {e(search)} "
+                f"<span style='color:#cccccc;'>({len(matches)} matches)</span></h3>"
+                f"<ul>{''.join(rows)}</ul>{extra}"
+            )
+
+        html = f"""
+        <html>
+        <body style="font-family:Arial;font-size:13px;color:#ffffff;background-color:#2b2b2b;">
+            <div style="background:#705a25;color:white;padding:8px;font-weight:bold;">
+                SAVED SEARCH ALERTS
+            </div>
+            <p>The latest refresh found changed listings matching your saved searches.</p>
+            {''.join(sections)}
+        </body>
+        </html>
+        """
+
+        self.details.setHtml(html)
 
     def start_background_refresh(self):
         if self.refresh_running:
@@ -316,18 +431,31 @@ class MainWindow(QMainWindow):
     def on_refresh_finished(self, summary):
         self.refresh_btn.setEnabled(True)
 
+        self.saved_search_alerts = self.check_saved_search_alerts()
+        self.refresh_saved_searches_list()
+
         if self.showing_changes:
             self.view_changes()
         else:
             results = self.plugin_manager.search_all(self.search_input.text().strip())
             self.populate_table(results)
 
-        self.status.showMessage(
+        base_message = (
             f"Cache refreshed: {summary.get('total', 0)} total, "
             f"{summary.get('new', 0)} new, "
             f"{summary.get('removed', 0)} removed, "
             f"{summary.get('price_changed', 0)} price changes"
         )
+
+        alert_count = sum(len(matches) for matches in self.saved_search_alerts.values())
+        if alert_count:
+            searches_hit = len(self.saved_search_alerts)
+            self.status.showMessage(
+                f"{base_message} | Saved search alerts: {alert_count} matches across {searches_hit} searches"
+            )
+            self.show_saved_search_alerts()
+        else:
+            self.status.showMessage(base_message)
 
     def on_refresh_failed(self, error):
         self.refresh_btn.setEnabled(True)
