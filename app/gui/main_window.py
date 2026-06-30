@@ -1,10 +1,12 @@
 from html import escape
+import json
+from pathlib import Path
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QTableWidget, QTableWidgetItem,
     QTextBrowser, QLineEdit, QPushButton,
-    QSplitter, QStatusBar
+    QSplitter, QStatusBar, QLabel
 )
 from PySide6.QtCore import Qt, QSize, QObject, QThread, Signal, QUrl
 from PySide6.QtGui import QPixmap, QIcon, QColor
@@ -41,6 +43,9 @@ class MainWindow(QMainWindow):
         self.current_results = []
         self.showing_changes = False
 
+        self.saved_searches_file = Path("cache") / "saved_searches.json"
+        self.saved_searches = []
+
         self.image_cache = {}
         self.failed_image_urls = set()
         self.pending_image_replies = {}
@@ -53,12 +58,35 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._apply_theme()
+        self.load_saved_searches()
         self.load_cached_results_on_startup()
 
     def _build_ui(self):
         self.nav = QListWidget()
         self.nav.addItems(["Dashboard", "Searches", "Sites", "History", "Settings"])
-        self.nav.setMaximumWidth(200)
+
+        self.saved_searches_list = QListWidget()
+        self.saved_searches_list.itemDoubleClicked.connect(self.run_selected_saved_search)
+
+        self.add_saved_btn = QPushButton("Save Current Search")
+        self.add_saved_btn.clicked.connect(self.add_saved_search)
+
+        self.run_saved_btn = QPushButton("Run Saved Search")
+        self.run_saved_btn.clicked.connect(self.run_selected_saved_search)
+
+        self.delete_saved_btn = QPushButton("Delete Saved Search")
+        self.delete_saved_btn.clicked.connect(self.delete_selected_saved_search)
+
+        left_widget = QWidget()
+        left_widget.setMaximumWidth(240)
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.addWidget(QLabel("Navigation"))
+        left_layout.addWidget(self.nav)
+        left_layout.addWidget(QLabel("Saved Searches"))
+        left_layout.addWidget(self.saved_searches_list)
+        left_layout.addWidget(self.add_saved_btn)
+        left_layout.addWidget(self.run_saved_btn)
+        left_layout.addWidget(self.delete_saved_btn)
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search cached listings...")
@@ -110,10 +138,10 @@ class MainWindow(QMainWindow):
         center_layout.addWidget(self.table)
 
         splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(self.nav)
+        splitter.addWidget(left_widget)
         splitter.addWidget(center)
         splitter.addWidget(self.details)
-        splitter.setSizes([200, 860, 390])
+        splitter.setSizes([240, 820, 390])
 
         root = QWidget()
         layout = QHBoxLayout(root)
@@ -164,6 +192,98 @@ class MainWindow(QMainWindow):
 
         self.populate_table(results)
         self.status.showMessage(f"Showing changed listings: {len(results)}")
+
+
+    def load_saved_searches(self):
+        self.saved_searches_file.parent.mkdir(exist_ok=True)
+
+        if not self.saved_searches_file.exists():
+            self.saved_searches = []
+            self.refresh_saved_searches_list()
+            return
+
+        try:
+            with self.saved_searches_file.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            if isinstance(data, list):
+                self.saved_searches = [
+                    str(item).strip()
+                    for item in data
+                    if str(item).strip()
+                ]
+            else:
+                self.saved_searches = []
+        except Exception as e:
+            print(f"[SavedSearches] Failed to load saved searches: {e}")
+            self.saved_searches = []
+
+        self.refresh_saved_searches_list()
+
+    def save_saved_searches(self):
+        self.saved_searches_file.parent.mkdir(exist_ok=True)
+
+        try:
+            with self.saved_searches_file.open("w", encoding="utf-8") as f:
+                json.dump(self.saved_searches, f, indent=2)
+        except Exception as e:
+            print(f"[SavedSearches] Failed to save saved searches: {e}")
+            self.status.showMessage(f"Failed to save saved searches: {e}")
+
+    def refresh_saved_searches_list(self):
+        self.saved_searches_list.clear()
+
+        for search in self.saved_searches:
+            self.saved_searches_list.addItem(search)
+
+    def add_saved_search(self):
+        query = self.search_input.text().strip()
+
+        if not query:
+            self.status.showMessage("Enter a search term before saving.")
+            return
+
+        existing = {item.lower() for item in self.saved_searches}
+        if query.lower() in existing:
+            self.status.showMessage(f"Saved search already exists: {query}")
+            return
+
+        self.saved_searches.append(query)
+        self.saved_searches.sort(key=str.lower)
+        self.save_saved_searches()
+        self.refresh_saved_searches_list()
+        self.status.showMessage(f"Saved search: {query}")
+
+    def run_selected_saved_search(self):
+        item = self.saved_searches_list.currentItem()
+
+        if not item:
+            self.status.showMessage("Select a saved search first.")
+            return
+
+        query = item.text().strip()
+        if not query:
+            return
+
+        self.search_input.setText(query)
+        self.run_search()
+
+    def delete_selected_saved_search(self):
+        item = self.saved_searches_list.currentItem()
+
+        if not item:
+            self.status.showMessage("Select a saved search to delete.")
+            return
+
+        query = item.text().strip()
+        self.saved_searches = [
+            search for search in self.saved_searches
+            if search.lower() != query.lower()
+        ]
+
+        self.save_saved_searches()
+        self.refresh_saved_searches_list()
+        self.status.showMessage(f"Deleted saved search: {query}")
 
     def start_background_refresh(self):
         if self.refresh_running:
@@ -439,6 +559,12 @@ class MainWindow(QMainWindow):
 
             QTextBrowser a {
                 color: #79b8ff;
+            }
+
+            QLabel {
+                color: #ffffff;
+                font-weight: bold;
+                padding-top: 6px;
             }
 
             QPushButton {
