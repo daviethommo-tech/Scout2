@@ -154,8 +154,8 @@ class MainWindow(QMainWindow):
     def view_changes(self):
         self.showing_changes = True
 
-        if hasattr(self.plugin_manager, "get_changed_results"):
-            results = self.plugin_manager.get_changed_results()
+        if hasattr(self.plugin_manager, "get_recent_changes"):
+            results = self.plugin_manager.get_recent_changes()
         else:
             results = [
                 item for item in self.plugin_manager.get_all_cached_results()
@@ -206,7 +206,7 @@ class MainWindow(QMainWindow):
             f"Cache refreshed: {summary.get('total', 0)} total, "
             f"{summary.get('new', 0)} new, "
             f"{summary.get('removed', 0)} removed, "
-            f"{summary.get('price_changes', 0)} price changes"
+            f"{summary.get('price_changed', 0)} price changes"
         )
 
     def on_refresh_failed(self, error):
