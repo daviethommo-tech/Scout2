@@ -42,12 +42,13 @@ class ListingsPage(QWidget):
 
         self.search_input = QComboBox()
         self.search_input.setEditable(True)
-        self.search_input.setMinimumWidth(460)
+        self.search_input.setMinimumWidth(120)
+        self.search_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.search_input.lineEdit().setPlaceholderText("Type a search or choose a saved search...")
         self.search_input.lineEdit().returnPressed.connect(self._emit_search)
 
         self.source_filter = QComboBox()
-        self.source_filter.setMinimumWidth(120)
+        self.source_filter.setMinimumWidth(95)
         self.source_filter.setMaximumWidth(190)
         self.source_filter.currentTextChanged.connect(self._on_source_filter_changed)
 
@@ -57,32 +58,42 @@ class ListingsPage(QWidget):
         self.save_search_btn = QPushButton("Save Search")
         self.save_search_btn.clicked.connect(self.save_search_requested.emit)
 
-        self.refresh_btn = QPushButton("Refresh Cache")
+        self.refresh_btn = QPushButton("Refresh")
         self.refresh_btn.clicked.connect(self.refresh_requested.emit)
 
-        self.changes_btn = QPushButton("View Changes")
+        self.changes_btn = QPushButton("Changes")
         self.changes_btn.clicked.connect(self.view_changes_requested.emit)
 
         self.all_btn = QPushButton("View All")
         self.all_btn.clicked.connect(self.view_all_requested.emit)
 
-        self.manage_saved_btn = QPushButton("Manage Saved Searches")
+        self.manage_saved_btn = QPushButton("Manage")
         self.manage_saved_btn.clicked.connect(self.manage_saved_searches_requested.emit)
 
         search_row = QHBoxLayout()
+        search_row.setContentsMargins(0, 0, 0, 0)
         search_row.addWidget(QLabel("Source"))
         search_row.addWidget(self.source_filter)
         search_row.addWidget(QLabel("Search"))
-        search_row.addWidget(self.search_input)
+        search_row.addWidget(self.search_input, 1)
         search_row.addWidget(self.search_btn)
-        search_row.addWidget(self.save_search_btn)
-        search_row.addWidget(self.refresh_btn)
-        search_row.addWidget(self.changes_btn)
-        search_row.addWidget(self.all_btn)
-        search_row.addWidget(self.manage_saved_btn)
+
+        actions_row = QHBoxLayout()
+        actions_row.setContentsMargins(0, 0, 0, 0)
+        actions_row.addStretch()
+        actions_row.addWidget(self.save_current_from_listings_btn)
+        actions_row.addWidget(self.refresh_btn)
+        actions_row.addWidget(self.changes_btn)
+        actions_row.addWidget(self.all_btn)
+        actions_row.addWidget(self.manage_saved_btn)
 
         top_widget = QWidget()
-        top_widget.setLayout(search_row)
+        top_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        top_layout = QVBoxLayout(top_widget)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setSpacing(4)
+        top_layout.addLayout(search_row)
+        top_layout.addLayout(actions_row)
 
         self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels([
@@ -93,7 +104,7 @@ class ListingsPage(QWidget):
         self.table.itemSelectionChanged.connect(self.show_selected_details)
         self.table.setIconSize(QSize(90, 70))
 
-        widths = [105, 55, 90, 85, 95, 475, 100, 190, 70]
+        widths = [45, 90, 55, 80, 75, 85, 300, 90, 130, 60]
         for i, w in enumerate(widths):
             self.table.setColumnWidth(i, w)
 
@@ -101,6 +112,7 @@ class ListingsPage(QWidget):
         self.details.setReadOnly(True)
         self.details.setOpenExternalLinks(True)
         self.details.setText("Select a listing to view details...")
+        self.details.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         splitter = QSplitter(Qt.Horizontal)
         left = QWidget()
@@ -110,7 +122,7 @@ class ListingsPage(QWidget):
 
         splitter.addWidget(left)
         splitter.addWidget(self.details)
-        splitter.setSizes([860, 390])
+        splitter.setSizes([760, 260])
 
         layout.addWidget(splitter)
 

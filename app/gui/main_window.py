@@ -36,7 +36,7 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.setWindowTitle("Scout 2.0")
-        self.resize(1450, 820)
+        self.resize(1200, 820)
 
         self.plugin_manager = PluginManager()
         self.current_results = []
@@ -71,7 +71,7 @@ class MainWindow(QMainWindow):
             "Notifications",
             "Settings",
         ])
-        self.nav.setMaximumWidth(210)
+        self.nav.setMaximumWidth(135)
         self.nav.currentRowChanged.connect(self.change_page)
 
         self.pages = QStackedWidget()
@@ -91,7 +91,7 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(self.nav)
         splitter.addWidget(self.pages)
-        splitter.setSizes([210, 1240])
+        splitter.setSizes([90, 1000])
 
         root = QWidget()
         layout = QHBoxLayout(root)
