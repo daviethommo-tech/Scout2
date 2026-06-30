@@ -18,6 +18,12 @@ class SeabreezePlugin(BasePlugin):
 
     ROOT_URL = "https://www.seabreeze.com.au"
 
+    USER_AGENT = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/126.0.0.0 Safari/537.36"
+    )
+
     def __init__(self, headless=False, debug=True, max_pages=None):
         self.headless = headless
         self.debug = debug
@@ -39,8 +45,26 @@ class SeabreezePlugin(BasePlugin):
         duplicates = 0
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=self.headless)
-            page = browser.new_page(viewport={"width": 1600, "height": 1200})
+            self.log(f"[Seabreeze] Launching Chromium headless={self.headless}")
+
+            browser = p.chromium.launch(
+                headless=self.headless,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                ],
+            )
+
+            context = browser.new_context(
+                viewport={"width": 1600, "height": 1200},
+                user_agent=self.USER_AGENT,
+                locale="en-AU",
+                timezone_id="Australia/Melbourne",
+            )
+
+            page = context.new_page()
             page.set_default_timeout(30000)
 
             for category_url in self.CATEGORY_URLS:
@@ -70,6 +94,7 @@ class SeabreezePlugin(BasePlugin):
                     except PlaywrightTimeoutError as e:
                         print(f"[Seabreeze] Page load timeout: {url}")
                         print(e)
+                        self._write_debug_timeout(page, page_num)
                         break
 
                     html = page.content()
@@ -83,6 +108,7 @@ class SeabreezePlugin(BasePlugin):
 
                     if not cards:
                         self.log("[DEBUG] No cards found; stopping category")
+                        self._write_debug_timeout(page, page_num, suffix="no_cards")
                         break
 
                     added = 0
@@ -123,6 +149,7 @@ class SeabreezePlugin(BasePlugin):
                     url = next_url
                     page_num += 1
 
+            context.close()
             browser.close()
 
         print()
@@ -135,6 +162,32 @@ class SeabreezePlugin(BasePlugin):
         print("========================================")
 
         return results
+
+    def _write_debug_timeout(self, page, page_num, suffix="timeout"):
+        """Save the HTML Playwright received so we can see Cloudflare/markup issues."""
+        try:
+            title = page.title()
+        except Exception:
+            title = "<unable to read title>"
+
+        try:
+            current_url = page.url
+        except Exception:
+            current_url = "<unable to read url>"
+
+        print("[Seabreeze] Debug page title:", title)
+        print("[Seabreeze] Debug current URL:", current_url)
+
+        filename = f"debug_seabreeze_{suffix}_page_{page_num}.html"
+        try:
+            html = page.content()
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(html)
+            print(f"[Seabreeze] Saved debug HTML: {filename}")
+            print("[Seabreeze] HTML sample:")
+            print(html[:1000])
+        except Exception as e:
+            print(f"[Seabreeze] Failed to save debug HTML: {e}")
 
     def _find_next_url(self, soup, current_url, page_num):
         expected_page = page_num + 1
