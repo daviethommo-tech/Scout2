@@ -1,4 +1,7 @@
 from html import escape
+import json
+from pathlib import Path
+from datetime import datetime, timezone
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
@@ -11,8 +14,6 @@ from PySide6.QtGui import QPixmap, QIcon, QColor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
 from app.plugins.plugin_manager import PluginManager
-from app.managers.saved_search_manager import SavedSearchManager
-from app.managers.notification_manager import NotificationManager
 
 
 class CacheRefreshWorker(QObject):
@@ -43,11 +44,11 @@ class MainWindow(QMainWindow):
         self.current_results = []
         self.showing_changes = False
 
-        self.saved_search_manager = SavedSearchManager()
+        self.saved_searches_file = Path("cache") / "saved_searches.json"
         self.saved_searches = []
         self.saved_search_alerts = {}
 
-        self.notification_manager = NotificationManager()
+        self.notifications_file = Path("cache") / "notifications.json"
         self.notifications = []
 
         self.image_cache = {}
@@ -376,12 +377,40 @@ class MainWindow(QMainWindow):
 
 
     def load_saved_searches(self):
-        self.saved_searches = self.saved_search_manager.load()
+        self.saved_searches_file.parent.mkdir(exist_ok=True)
+
+        if not self.saved_searches_file.exists():
+            self.saved_searches = []
+            self.refresh_saved_searches_list()
+            return
+
+        try:
+            with self.saved_searches_file.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            if isinstance(data, list):
+                self.saved_searches = [
+                    str(item).strip()
+                    for item in data
+                    if str(item).strip()
+                ]
+            else:
+                self.saved_searches = []
+        except Exception as e:
+            print(f"[SavedSearches] Failed to load saved searches: {e}")
+            self.saved_searches = []
+
         self.refresh_saved_searches_list()
 
     def save_saved_searches(self):
-        if not self.saved_search_manager.save():
-            self.status.showMessage("Failed to save saved searches.")
+        self.saved_searches_file.parent.mkdir(exist_ok=True)
+
+        try:
+            with self.saved_searches_file.open("w", encoding="utf-8") as f:
+                json.dump(self.saved_searches, f, indent=2)
+        except Exception as e:
+            print(f"[SavedSearches] Failed to save saved searches: {e}")
+            self.status.showMessage(f"Failed to save saved searches: {e}")
 
     def refresh_saved_searches_list(self):
         if hasattr(self, "saved_searches_list"):
@@ -412,16 +441,24 @@ class MainWindow(QMainWindow):
     def add_saved_search(self):
         query = self.current_search_text()
 
-        added, message = self.saved_search_manager.add(query)
-        self.saved_searches = self.saved_search_manager.searches
+        if not query:
+            self.status.showMessage("Enter a search term before saving.")
+            return
 
-        if added:
-            self.refresh_saved_searches_list()
+        existing = {item.lower() for item in self.saved_searches}
+        if query.lower() in existing:
+            self.status.showMessage(f"Saved search already exists: {query}")
+            return
 
-            if hasattr(self, "search_input"):
-                self.set_search_text(query)
+        self.saved_searches.append(query)
+        self.saved_searches.sort(key=str.lower)
+        self.save_saved_searches()
+        self.refresh_saved_searches_list()
 
-        self.status.showMessage(message)
+        if hasattr(self, "search_input"):
+            self.set_search_text(query)
+
+        self.status.showMessage(f"Saved search: {query}")
 
     def current_search_text(self):
         if hasattr(self.search_input, "currentText"):
@@ -468,23 +505,45 @@ class MainWindow(QMainWindow):
             return
 
         query = (item.data(Qt.UserRole) or item.text()).strip()
-        deleted, message = self.saved_search_manager.delete(query)
-        self.saved_searches = self.saved_search_manager.searches
+        self.saved_searches = [
+            search for search in self.saved_searches
+            if search.lower() != query.lower()
+        ]
 
-        if deleted:
-            self.refresh_saved_searches_list()
-
-        self.status.showMessage(message)
+        self.save_saved_searches()
+        self.refresh_saved_searches_list()
+        self.status.showMessage(f"Deleted saved search: {query}")
 
     def load_notifications(self):
-        self.notifications = self.notification_manager.load()
+        self.notifications_file.parent.mkdir(exist_ok=True)
+
+        if not self.notifications_file.exists():
+            self.notifications = []
+            return
+
+        try:
+            with self.notifications_file.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            self.notifications = data if isinstance(data, list) else []
+        except Exception as e:
+            print(f"[Notifications] Failed to load notifications: {e}")
+            self.notifications = []
 
     def save_notifications(self):
-        if not self.notification_manager.save():
-            self.status.showMessage("Failed to save notifications.")
+        self.notifications_file.parent.mkdir(exist_ok=True)
+
+        try:
+            with self.notifications_file.open("w", encoding="utf-8") as f:
+                json.dump(self.notifications[:100], f, indent=2)
+        except Exception as e:
+            print(f"[Notifications] Failed to save notifications: {e}")
+            self.status.showMessage(f"Failed to save notifications: {e}")
 
     def add_notification(self, notification):
-        self.notifications = self.notification_manager.add(notification)
+        self.notifications.insert(0, notification)
+        self.notifications = self.notifications[:100]
+        self.save_notifications()
 
     def create_refresh_notification(self, summary):
         changed_items = [
@@ -492,11 +551,68 @@ class MainWindow(QMainWindow):
             if getattr(item, "change_type", "")
         ]
 
-        return self.notification_manager.create_refresh_notification(
-            summary=summary,
-            changed_items=changed_items,
-            saved_search_alerts=self.saved_search_alerts,
+        saved_alert_count = sum(
+            len(matches) for matches in self.saved_search_alerts.values()
         )
+
+        important_count = (
+            summary.get("new", 0)
+            + summary.get("price_changed", 0)
+            + summary.get("reactivated", 0)
+            + summary.get("updated", 0)
+            + saved_alert_count
+        )
+
+        if not important_count and not changed_items:
+            return None
+
+        items = []
+        for item in changed_items[:30]:
+            items.append({
+                "title": getattr(item, "title", ""),
+                "price": getattr(item, "price", ""),
+                "previous_price": getattr(item, "previous_price", ""),
+                "location": getattr(item, "location", ""),
+                "url": getattr(item, "url", ""),
+                "change_type": getattr(item, "change_type", ""),
+                "status": getattr(item, "status", "active"),
+                "category": getattr(item, "category", ""),
+            })
+
+        saved_searches = {
+            search: [
+                {
+                    "title": getattr(item, "title", ""),
+                    "price": getattr(item, "price", ""),
+                    "previous_price": getattr(item, "previous_price", ""),
+                    "location": getattr(item, "location", ""),
+                    "url": getattr(item, "url", ""),
+                    "change_type": getattr(item, "change_type", ""),
+                }
+                for item in matches[:20]
+            ]
+            for search, matches in self.saved_search_alerts.items()
+        }
+
+        return {
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "type": "refresh",
+            "title": "Cache refresh",
+            "summary": {
+                "total": summary.get("total", 0),
+                "active": summary.get("active", 0),
+                "removed": summary.get("removed", 0),
+                "new": summary.get("new", 0),
+                "price_changed": summary.get("price_changed", 0),
+                "reactivated": summary.get("reactivated", 0),
+                "updated": summary.get("updated", 0),
+                "changed": summary.get("changed", 0),
+                "saved_search_alerts": saved_alert_count,
+                "saved_searches_hit": len(self.saved_search_alerts),
+            },
+            "items": items,
+            "saved_searches": saved_searches,
+        }
 
     def show_notification_center(self):
         def e(value):
@@ -621,7 +737,8 @@ class MainWindow(QMainWindow):
         self.status.showMessage(f"Notification Center: {len(self.notifications)} saved notifications")
 
     def clear_notifications(self):
-        self.notifications = self.notification_manager.clear()
+        self.notifications = []
+        self.save_notifications()
         target = getattr(self, "notifications_text", self.details)
         target.setHtml("""
         <html>
@@ -634,8 +751,52 @@ class MainWindow(QMainWindow):
         self.status.showMessage("Notifications cleared")
 
     def check_saved_search_alerts(self):
-        listings = self.plugin_manager.get_all_cached_results()
-        return self.saved_search_manager.check_alerts(listings)
+        """
+        Return saved searches that match listings changed in the latest refresh.
+
+        Alerts focus on active listings with a current change marker, especially:
+        - new
+        - price_changed
+        - reactivated
+        - updated
+        """
+        alerts = {}
+
+        if not self.saved_searches:
+            return alerts
+
+        changed_items = [
+            item for item in self.plugin_manager.get_all_cached_results()
+            if getattr(item, "status", "active") == "active"
+            and getattr(item, "change_type", "")
+        ]
+
+        for search in self.saved_searches:
+            words = search.lower().split()
+            if not words:
+                continue
+
+            matches = []
+            for item in changed_items:
+                haystack = " ".join([
+                    getattr(item, "title", ""),
+                    getattr(item, "description", ""),
+                    getattr(item, "size", ""),
+                    getattr(item, "location", ""),
+                    getattr(item, "category", ""),
+                    getattr(item, "price", ""),
+                    getattr(item, "source", ""),
+                    getattr(item, "change_type", ""),
+                    " ".join(getattr(item, "changes", []) or []),
+                ]).lower()
+
+                if all(word in haystack for word in words):
+                    matches.append(item)
+
+            if matches:
+                alerts[search] = matches
+
+        return alerts
 
     def show_saved_search_alerts(self):
         if not self.saved_search_alerts:
