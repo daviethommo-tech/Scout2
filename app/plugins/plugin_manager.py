@@ -25,7 +25,7 @@ class PluginManager:
 
     def __init__(self):
         self.plugins = [
-            SeabreezePlugin(headless=False, debug=True)
+            SeabreezePlugin(headless=True, debug=True)
         ]
 
         self.cache_dir = Path("cache")
