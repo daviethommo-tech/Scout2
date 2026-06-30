@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QListWidget, QTableWidget, QTableWidgetItem,
     QTextBrowser, QLineEdit, QPushButton,
-    QSplitter, QStatusBar, QLabel
+    QSplitter, QStatusBar, QLabel, QStackedWidget
 )
 from PySide6.QtCore import Qt, QSize, QObject, QThread, Signal, QUrl
 from PySide6.QtGui import QPixmap, QIcon, QColor
@@ -69,30 +69,59 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self):
         self.nav = QListWidget()
-        self.nav.addItems(["Dashboard", "Searches", "Sites", "History", "Settings"])
+        self.nav.addItems([
+            "Dashboard",
+            "Listings",
+            "Saved Searches",
+            "Notifications",
+            "Settings",
+        ])
+        self.nav.setMaximumWidth(210)
+        self.nav.currentRowChanged.connect(self.change_page)
 
-        self.saved_searches_list = QListWidget()
-        self.saved_searches_list.itemDoubleClicked.connect(self.run_selected_saved_search)
+        self.pages = QStackedWidget()
 
-        self.add_saved_btn = QPushButton("Save Current Search")
-        self.add_saved_btn.clicked.connect(self.add_saved_search)
+        self.dashboard_page = self._build_dashboard_page()
+        self.listings_page = self._build_listings_page()
+        self.saved_searches_page = self._build_saved_searches_page()
+        self.notifications_page = self._build_notifications_page()
+        self.settings_page = self._build_settings_page()
 
-        self.run_saved_btn = QPushButton("Run Saved Search")
-        self.run_saved_btn.clicked.connect(self.run_selected_saved_search)
+        self.pages.addWidget(self.dashboard_page)
+        self.pages.addWidget(self.listings_page)
+        self.pages.addWidget(self.saved_searches_page)
+        self.pages.addWidget(self.notifications_page)
+        self.pages.addWidget(self.settings_page)
 
-        self.delete_saved_btn = QPushButton("Delete Saved Search")
-        self.delete_saved_btn.clicked.connect(self.delete_selected_saved_search)
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self.nav)
+        splitter.addWidget(self.pages)
+        splitter.setSizes([210, 1240])
 
-        left_widget = QWidget()
-        left_widget.setMaximumWidth(240)
-        left_layout = QVBoxLayout(left_widget)
-        left_layout.addWidget(QLabel("Navigation"))
-        left_layout.addWidget(self.nav)
-        left_layout.addWidget(QLabel("Saved Searches"))
-        left_layout.addWidget(self.saved_searches_list)
-        left_layout.addWidget(self.add_saved_btn)
-        left_layout.addWidget(self.run_saved_btn)
-        left_layout.addWidget(self.delete_saved_btn)
+        root = QWidget()
+        layout = QHBoxLayout(root)
+        layout.addWidget(splitter)
+        self.setCentralWidget(root)
+
+        self.status = QStatusBar()
+        self.setStatusBar(self.status)
+
+        self.nav.setCurrentRow(1)
+
+    def _build_dashboard_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        self.dashboard_text = QTextBrowser()
+        self.dashboard_text.setReadOnly(True)
+        self.dashboard_text.setOpenExternalLinks(True)
+
+        layout.addWidget(self.dashboard_text)
+        return page
+
+    def _build_listings_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search cached listings...")
@@ -110,20 +139,12 @@ class MainWindow(QMainWindow):
         self.all_btn = QPushButton("View All")
         self.all_btn.clicked.connect(self.view_all)
 
-        self.notifications_btn = QPushButton("Notification Center")
-        self.notifications_btn.clicked.connect(self.show_notification_center)
-
-        self.clear_notifications_btn = QPushButton("Clear Notifications")
-        self.clear_notifications_btn.clicked.connect(self.clear_notifications)
-
         top = QHBoxLayout()
         top.addWidget(self.search_input)
         top.addWidget(self.search_btn)
         top.addWidget(self.refresh_btn)
         top.addWidget(self.changes_btn)
         top.addWidget(self.all_btn)
-        top.addWidget(self.notifications_btn)
-        top.addWidget(self.clear_notifications_btn)
 
         top_widget = QWidget()
         top_widget.setLayout(top)
@@ -137,7 +158,7 @@ class MainWindow(QMainWindow):
         self.table.itemSelectionChanged.connect(self.show_selected_details)
         self.table.setIconSize(QSize(90, 70))
 
-        widths = [105, 55, 80, 85, 430, 90, 170, 70]
+        widths = [105, 55, 90, 85, 520, 100, 190, 70]
         for i, w in enumerate(widths):
             self.table.setColumnWidth(i, w)
 
@@ -146,24 +167,160 @@ class MainWindow(QMainWindow):
         self.details.setOpenExternalLinks(True)
         self.details.setText("Select a listing to view details...")
 
-        center = QWidget()
-        center_layout = QVBoxLayout(center)
-        center_layout.addWidget(top_widget)
-        center_layout.addWidget(self.table)
-
         splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(left_widget)
-        splitter.addWidget(center)
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.addWidget(top_widget)
+        left_layout.addWidget(self.table)
+
+        splitter.addWidget(left)
         splitter.addWidget(self.details)
-        splitter.setSizes([240, 820, 390])
+        splitter.setSizes([860, 390])
 
-        root = QWidget()
-        layout = QHBoxLayout(root)
         layout.addWidget(splitter)
-        self.setCentralWidget(root)
+        return page
 
-        self.status = QStatusBar()
-        self.setStatusBar(self.status)
+    def _build_saved_searches_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        heading = QLabel("Saved Searches")
+        self.saved_searches_list = QListWidget()
+        self.saved_searches_list.itemDoubleClicked.connect(self.run_selected_saved_search)
+
+        self.add_saved_btn = QPushButton("Save Current Search")
+        self.add_saved_btn.clicked.connect(self.add_saved_search)
+
+        self.run_saved_btn = QPushButton("Run Saved Search")
+        self.run_saved_btn.clicked.connect(self.run_selected_saved_search)
+
+        self.delete_saved_btn = QPushButton("Delete Saved Search")
+        self.delete_saved_btn.clicked.connect(self.delete_selected_saved_search)
+
+        hint = QLabel("Tip: enter a query on the Listings page, then save it here. Double-click a saved search to run it.")
+
+        layout.addWidget(heading)
+        layout.addWidget(hint)
+        layout.addWidget(self.saved_searches_list)
+        layout.addWidget(self.add_saved_btn)
+        layout.addWidget(self.run_saved_btn)
+        layout.addWidget(self.delete_saved_btn)
+
+        return page
+
+    def _build_notifications_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        top = QHBoxLayout()
+
+        self.show_notifications_btn = QPushButton("Refresh Notification Center")
+        self.show_notifications_btn.clicked.connect(self.show_notification_center)
+
+        self.clear_notifications_btn = QPushButton("Clear Notifications")
+        self.clear_notifications_btn.clicked.connect(self.clear_notifications)
+
+        top.addWidget(self.show_notifications_btn)
+        top.addWidget(self.clear_notifications_btn)
+
+        top_widget = QWidget()
+        top_widget.setLayout(top)
+
+        self.notifications_text = QTextBrowser()
+        self.notifications_text.setReadOnly(True)
+        self.notifications_text.setOpenExternalLinks(True)
+
+        layout.addWidget(QLabel("Notification Center"))
+        layout.addWidget(top_widget)
+        layout.addWidget(self.notifications_text)
+
+        return page
+
+    def _build_settings_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        self.settings_text = QTextBrowser()
+        self.settings_text.setReadOnly(True)
+        self.settings_text.setHtml("""
+        <html>
+        <body style="font-family:Arial;font-size:13px;color:#ffffff;background-color:#2b2b2b;">
+            <h2>Settings</h2>
+            <p>Settings will live here as Scout2 grows.</p>
+            <ul>
+                <li>Refresh interval</li>
+                <li>Notification options</li>
+                <li>Cache retention</li>
+                <li>Theme</li>
+                <li>Plugin enable/disable</li>
+            </ul>
+        </body>
+        </html>
+        """)
+
+        layout.addWidget(self.settings_text)
+        return page
+
+    def change_page(self, index):
+        if index < 0:
+            return
+
+        self.pages.setCurrentIndex(index)
+
+        if index == 0:
+            self.update_dashboard()
+        elif index == 3:
+            self.show_notification_center()
+
+    def update_dashboard(self):
+        results = self.plugin_manager.get_all_cached_results()
+
+        total = len(results)
+        active = sum(1 for item in results if getattr(item, "status", "active") == "active")
+        removed = sum(1 for item in results if getattr(item, "status", "active") == "removed")
+        new_count = sum(1 for item in results if getattr(item, "is_new", False))
+        changed = sum(1 for item in results if getattr(item, "change_type", ""))
+        price_changed = sum(1 for item in results if getattr(item, "change_type", "") == "price_changed")
+
+        saved_count = len(self.saved_searches)
+        notification_count = len(self.notifications)
+
+        latest_notification = self.notifications[0] if self.notifications else {}
+        latest_time = latest_notification.get("created_at", "No notifications yet")
+
+        html = f"""
+        <html>
+        <body style="font-family:Arial;font-size:13px;color:#ffffff;background-color:#2b2b2b;">
+            <div style="background:#333f5f;color:white;padding:8px;font-weight:bold;">
+                SCOUT2 DASHBOARD
+            </div>
+
+            <h2>Cache Overview</h2>
+            <p>
+                <b>Total cached:</b> {total}<br>
+                <b>Active:</b> {active}<br>
+                <b>Removed retained:</b> {removed}<br>
+                <b>New:</b> {new_count}<br>
+                <b>Changed:</b> {changed}<br>
+                <b>Price changes:</b> {price_changed}
+            </p>
+
+            <h2>Saved Searches</h2>
+            <p><b>{saved_count}</b> saved searches configured.</p>
+
+            <h2>Notifications</h2>
+            <p>
+                <b>{notification_count}</b> notifications stored.<br>
+                <b>Latest:</b> {latest_time}
+            </p>
+
+            <hr>
+            <p>Use the navigation panel to switch between Listings, Saved Searches, Notifications and Settings.</p>
+        </body>
+        </html>
+        """
+
+        self.dashboard_text.setHtml(html)
 
     def load_cached_results_on_startup(self):
         results = self.plugin_manager.get_all_cached_results()
@@ -283,6 +440,7 @@ class MainWindow(QMainWindow):
         if not query:
             return
 
+        self.nav.setCurrentRow(1)
         self.search_input.setText(query)
         self.run_search()
 
@@ -408,7 +566,8 @@ class MainWindow(QMainWindow):
             return escape(str(value or ""))
 
         if not self.notifications:
-            self.details.setHtml("""
+            target = getattr(self, "notifications_text", self.details)
+            target.setHtml("""
             <html>
             <body style="font-family:Arial;font-size:13px;color:#ffffff;background-color:#2b2b2b;">
                 <h2>Notification Center</h2>
@@ -520,13 +679,15 @@ class MainWindow(QMainWindow):
         </html>
         """
 
-        self.details.setHtml(html)
+        target = getattr(self, "notifications_text", self.details)
+        target.setHtml(html)
         self.status.showMessage(f"Notification Center: {len(self.notifications)} saved notifications")
 
     def clear_notifications(self):
         self.notifications = []
         self.save_notifications()
-        self.details.setHtml("""
+        target = getattr(self, "notifications_text", self.details)
+        target.setHtml("""
         <html>
         <body style="font-family:Arial;font-size:13px;color:#ffffff;background-color:#2b2b2b;">
             <h2>Notification Center</h2>

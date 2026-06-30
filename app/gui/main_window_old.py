@@ -1,6 +1,7 @@
 from html import escape
 import json
 from pathlib import Path
+from datetime import datetime, timezone
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
@@ -47,6 +48,9 @@ class MainWindow(QMainWindow):
         self.saved_searches = []
         self.saved_search_alerts = {}
 
+        self.notifications_file = Path("cache") / "notifications.json"
+        self.notifications = []
+
         self.image_cache = {}
         self.failed_image_urls = set()
         self.pending_image_replies = {}
@@ -60,6 +64,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._apply_theme()
         self.load_saved_searches()
+        self.load_notifications()
         self.load_cached_results_on_startup()
 
     def _build_ui(self):
@@ -105,12 +110,20 @@ class MainWindow(QMainWindow):
         self.all_btn = QPushButton("View All")
         self.all_btn.clicked.connect(self.view_all)
 
+        self.notifications_btn = QPushButton("Notification Center")
+        self.notifications_btn.clicked.connect(self.show_notification_center)
+
+        self.clear_notifications_btn = QPushButton("Clear Notifications")
+        self.clear_notifications_btn.clicked.connect(self.clear_notifications)
+
         top = QHBoxLayout()
         top.addWidget(self.search_input)
         top.addWidget(self.search_btn)
         top.addWidget(self.refresh_btn)
         top.addWidget(self.changes_btn)
         top.addWidget(self.all_btn)
+        top.addWidget(self.notifications_btn)
+        top.addWidget(self.clear_notifications_btn)
 
         top_widget = QWidget()
         top_widget.setLayout(top)
@@ -290,6 +303,239 @@ class MainWindow(QMainWindow):
         self.refresh_saved_searches_list()
         self.status.showMessage(f"Deleted saved search: {query}")
 
+    def load_notifications(self):
+        self.notifications_file.parent.mkdir(exist_ok=True)
+
+        if not self.notifications_file.exists():
+            self.notifications = []
+            return
+
+        try:
+            with self.notifications_file.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            self.notifications = data if isinstance(data, list) else []
+        except Exception as e:
+            print(f"[Notifications] Failed to load notifications: {e}")
+            self.notifications = []
+
+    def save_notifications(self):
+        self.notifications_file.parent.mkdir(exist_ok=True)
+
+        try:
+            with self.notifications_file.open("w", encoding="utf-8") as f:
+                json.dump(self.notifications[:100], f, indent=2)
+        except Exception as e:
+            print(f"[Notifications] Failed to save notifications: {e}")
+            self.status.showMessage(f"Failed to save notifications: {e}")
+
+    def add_notification(self, notification):
+        self.notifications.insert(0, notification)
+        self.notifications = self.notifications[:100]
+        self.save_notifications()
+
+    def create_refresh_notification(self, summary):
+        changed_items = [
+            item for item in self.plugin_manager.get_all_cached_results()
+            if getattr(item, "change_type", "")
+        ]
+
+        saved_alert_count = sum(
+            len(matches) for matches in self.saved_search_alerts.values()
+        )
+
+        important_count = (
+            summary.get("new", 0)
+            + summary.get("price_changed", 0)
+            + summary.get("reactivated", 0)
+            + summary.get("updated", 0)
+            + saved_alert_count
+        )
+
+        if not important_count and not changed_items:
+            return None
+
+        items = []
+        for item in changed_items[:30]:
+            items.append({
+                "title": getattr(item, "title", ""),
+                "price": getattr(item, "price", ""),
+                "previous_price": getattr(item, "previous_price", ""),
+                "location": getattr(item, "location", ""),
+                "url": getattr(item, "url", ""),
+                "change_type": getattr(item, "change_type", ""),
+                "status": getattr(item, "status", "active"),
+                "category": getattr(item, "category", ""),
+            })
+
+        saved_searches = {
+            search: [
+                {
+                    "title": getattr(item, "title", ""),
+                    "price": getattr(item, "price", ""),
+                    "previous_price": getattr(item, "previous_price", ""),
+                    "location": getattr(item, "location", ""),
+                    "url": getattr(item, "url", ""),
+                    "change_type": getattr(item, "change_type", ""),
+                }
+                for item in matches[:20]
+            ]
+            for search, matches in self.saved_search_alerts.items()
+        }
+
+        return {
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "type": "refresh",
+            "title": "Cache refresh",
+            "summary": {
+                "total": summary.get("total", 0),
+                "active": summary.get("active", 0),
+                "removed": summary.get("removed", 0),
+                "new": summary.get("new", 0),
+                "price_changed": summary.get("price_changed", 0),
+                "reactivated": summary.get("reactivated", 0),
+                "updated": summary.get("updated", 0),
+                "changed": summary.get("changed", 0),
+                "saved_search_alerts": saved_alert_count,
+                "saved_searches_hit": len(self.saved_search_alerts),
+            },
+            "items": items,
+            "saved_searches": saved_searches,
+        }
+
+    def show_notification_center(self):
+        def e(value):
+            return escape(str(value or ""))
+
+        if not self.notifications:
+            self.details.setHtml("""
+            <html>
+            <body style="font-family:Arial;font-size:13px;color:#ffffff;background-color:#2b2b2b;">
+                <h2>Notification Center</h2>
+                <p>No notifications yet. Refresh the cache to generate alerts.</p>
+            </body>
+            </html>
+            """)
+            self.status.showMessage("Notification Center: no notifications yet")
+            return
+
+        cards = []
+
+        for notification in self.notifications[:20]:
+            summary = notification.get("summary", {})
+            created_at = notification.get("created_at", "")
+
+            headline_bits = []
+            if summary.get("new", 0):
+                headline_bits.append(f"{summary.get('new', 0)} NEW")
+            if summary.get("price_changed", 0):
+                headline_bits.append(f"{summary.get('price_changed', 0)} price changes")
+            if summary.get("reactivated", 0):
+                headline_bits.append(f"{summary.get('reactivated', 0)} reactivated")
+            if summary.get("updated", 0):
+                headline_bits.append(f"{summary.get('updated', 0)} updated")
+            if summary.get("saved_search_alerts", 0):
+                headline_bits.append(
+                    f"{summary.get('saved_search_alerts', 0)} saved-search matches"
+                )
+
+            headline = " | ".join(headline_bits) if headline_bits else "Refresh completed"
+
+            saved_sections = []
+            for search, matches in notification.get("saved_searches", {}).items():
+                rows = []
+                for item in matches[:8]:
+                    url = item.get("url", "")
+                    title = item.get("title", "")
+                    title_html = f'<a href="{e(url)}">{e(title)}</a>' if url else e(title)
+
+                    previous_price = item.get("previous_price", "")
+                    previous = (
+                        f" <span style='color:#bbbbbb;'>(was {e(previous_price)})</span>"
+                        if previous_price else ""
+                    )
+
+                    rows.append(
+                        "<li>"
+                        f"<b>{e(item.get('change_type', '').upper())}</b> — "
+                        f"{title_html}<br>"
+                        f"<span style='color:#cccccc;'>{e(item.get('price', ''))}"
+                        f"{previous} &nbsp; | &nbsp; {e(item.get('location', ''))}</span>"
+                        "</li>"
+                    )
+
+                if rows:
+                    saved_sections.append(
+                        f"<h4>Saved search: {e(search)} ({len(matches)} matches)</h4>"
+                        f"<ul>{''.join(rows)}</ul>"
+                    )
+
+            item_rows = []
+            for item in notification.get("items", [])[:10]:
+                url = item.get("url", "")
+                title = item.get("title", "")
+                title_html = f'<a href="{e(url)}">{e(title)}</a>' if url else e(title)
+
+                previous_price = item.get("previous_price", "")
+                previous = (
+                    f" <span style='color:#bbbbbb;'>(was {e(previous_price)})</span>"
+                    if previous_price else ""
+                )
+
+                item_rows.append(
+                    "<li>"
+                    f"<b>{e(item.get('change_type', '').upper())}</b> — "
+                    f"{title_html}<br>"
+                    f"<span style='color:#cccccc;'>{e(item.get('price', ''))}"
+                    f"{previous} &nbsp; | &nbsp; {e(item.get('location', ''))}</span>"
+                    "</li>"
+                )
+
+            cards.append(
+                f"""
+                <div style="border:1px solid #555;margin:10px 0;padding:10px;background:#242424;">
+                    <h3 style="margin-top:0;">{e(headline)}</h3>
+                    <p style="color:#cccccc;"><b>Time:</b> {e(created_at)}</p>
+                    <p>
+                        <b>Total:</b> {e(summary.get('total', 0))}
+                        &nbsp; <b>Active:</b> {e(summary.get('active', 0))}
+                        &nbsp; <b>Removed retained:</b> {e(summary.get('removed', 0))}
+                    </p>
+                    {''.join(saved_sections)}
+                    <h4>Recent changes</h4>
+                    <ul>{''.join(item_rows) if item_rows else '<li>No changed listings recorded.</li>'}</ul>
+                </div>
+                """
+            )
+
+        html = f"""
+        <html>
+        <body style="font-family:Arial;font-size:13px;color:#ffffff;background-color:#2b2b2b;">
+            <div style="background:#333f5f;color:white;padding:8px;font-weight:bold;">
+                NOTIFICATION CENTER
+            </div>
+            <p>Showing the latest {min(len(self.notifications), 20)} notifications. Stored in cache/notifications.json.</p>
+            {''.join(cards)}
+        </body>
+        </html>
+        """
+
+        self.details.setHtml(html)
+        self.status.showMessage(f"Notification Center: {len(self.notifications)} saved notifications")
+
+    def clear_notifications(self):
+        self.notifications = []
+        self.save_notifications()
+        self.details.setHtml("""
+        <html>
+        <body style="font-family:Arial;font-size:13px;color:#ffffff;background-color:#2b2b2b;">
+            <h2>Notification Center</h2>
+            <p>Notifications cleared.</p>
+        </body>
+        </html>
+        """)
+        self.status.showMessage("Notifications cleared")
+
     def check_saved_search_alerts(self):
         """
         Return saved searches that match listings changed in the latest refresh.
@@ -433,6 +679,10 @@ class MainWindow(QMainWindow):
 
         self.saved_search_alerts = self.check_saved_search_alerts()
         self.refresh_saved_searches_list()
+
+        notification = self.create_refresh_notification(summary)
+        if notification:
+            self.add_notification(notification)
 
         if self.showing_changes:
             self.view_changes()
