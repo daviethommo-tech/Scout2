@@ -49,7 +49,7 @@ class ListingsPage(QWidget):
 
         self.source_filter = QComboBox()
         self.source_filter.setMinimumWidth(95)
-        self.source_filter.setMaximumWidth(190)
+        self.source_filter.setMaximumWidth(150)
         self.source_filter.currentTextChanged.connect(self._on_source_filter_changed)
 
         self.search_btn = QPushButton("Search")
@@ -81,7 +81,7 @@ class ListingsPage(QWidget):
         actions_row = QHBoxLayout()
         actions_row.setContentsMargins(0, 0, 0, 0)
         actions_row.addStretch()
-        actions_row.addWidget(self.save_current_from_listings_btn)
+        actions_row.addWidget(self.save_search_btn)
         actions_row.addWidget(self.refresh_btn)
         actions_row.addWidget(self.changes_btn)
         actions_row.addWidget(self.all_btn)
@@ -104,7 +104,7 @@ class ListingsPage(QWidget):
         self.table.itemSelectionChanged.connect(self.show_selected_details)
         self.table.setIconSize(QSize(90, 70))
 
-        widths = [45, 90, 55, 80, 75, 85, 300, 90, 130, 60]
+        widths = [105, 55, 90, 85, 95, 475, 100, 190, 70]
         for i, w in enumerate(widths):
             self.table.setColumnWidth(i, w)
 
